@@ -1,3 +1,5 @@
+<p align="center"><img src="logo.svg" alt="Berth logo" width="96" height="96"></p>
+
 # Berth
 
 > **Status:** planning done, no code yet. This file is the source of truth for the
@@ -107,8 +109,8 @@ Rules for these:
 
 Performance metrics for every app and for the services they use. Berth only
 reads; each service gets a read-only role (section 3, secrets rules apply).
-Metrics history is stored in Berth's own SQLite: about 7 days at full
-resolution, then downsampled. Polled every 15 to 30 seconds.
+Metrics history is stored in Berth's own PostgreSQL database: about 7 days at
+full resolution, then downsampled. Polled every 15 to 30 seconds.
 
 | Source | Metrics |
 |---|---|
@@ -161,8 +163,10 @@ Learned from reading both Kite360 repos. Breaking any of these causes real damag
 - ~~**How Berth deploys**~~ Decided: drive `docker compose`.
 - ~~**Build vs reuse**~~ Decided: build from scratch (Coolify, Dokploy, Komodo
   and Portainer were surveyed; none has the Kite360-specific actions).
-- **Where Berth's own state lives:** SQLite file vs. the host Postgres. Metrics
-  history is already decided as SQLite, which favours SQLite for everything.
+- ~~**Where Berth's own state lives**~~ Decided: PostgreSQL, for both app state
+  and metrics history. Use a dedicated database and role for Berth, separate from
+  the app databases it manages, so Berth can still start and show status when an
+  app database is down.
 - **Which server** hosts the pilot, and the real Traefik labels currently used
   for the Kite360 API (they are only on the server, not in any repo).
 - Production Postgres major version (sets `PG_MAJOR` for `pg_dump`; default 17).
