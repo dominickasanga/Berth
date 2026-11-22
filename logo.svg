@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="t">
+  <title id="t">Berth</title>
+  <rect width="128" height="128" rx="28" fill="#0F2A43"/>
+  <!-- containers moored at the berth -->
+  <rect x="24" y="40" width="34" height="24" rx="4" fill="#38BDF8"/>
+  <rect x="62" y="40" width="42" height="24" rx="4" fill="#F59E0B"/>
+  <rect x="38" y="68" width="52" height="24" rx="4" fill="#E2E8F0"/>
+  <!-- container ribs -->
+  <g stroke="#0F2A43" stroke-width="3" stroke-linecap="round" opacity=".35">
+    <path d="M36 46v12M46 46v12M76 46v12M86 46v12M96 46v12M52 74v12M64 74v12M76 74v12"/>
+  </g>
+  <!-- waterline -->
+  <path d="M16 106c8 0 8-6 16-6s8 6 16 6 8-6 16-6 8 6 16 6 8-6 16-6 8 6 16 6" fill="none" stroke="#38BDF8" stroke-width="5" stroke-linecap="round"/>
+</svg>
