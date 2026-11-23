@@ -1,0 +1,27 @@
+{{define "content"}}
+<div class="row"><h1 style="flex:1">{{.App.Name}}</h1>
+<form method="post" action="/apps/{{.App.Name}}/deploy"><button>Deploy</button></form></div>
+{{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+<div class="card"><h2>Status</h2>
+<div hx-get="/apps/{{.App.Name}}/status" hx-trigger="load, every 10s">…</div>
+<form class="row" method="post" action="/apps/{{.App.Name}}/control" style="margin-top:12px">
+<button class="plain" name="action" value="start">Start</button>
+<button class="plain" name="action" value="stop">Stop</button>
+<button class="plain" name="action" value="restart">Restart</button></form>
+<p class="mute">{{.App.RepoURL}} · {{.App.Branch}}{{if .App.Subfolder}} · {{.App.Subfolder}}{{end}} · {{.App.ComposeFile}}{{if .App.PredeploySvc}} · pre-deploy: {{.App.PredeploySvc}}{{end}}</p></div>
+<div class="card"><h2>Environment &amp; secrets</h2>
+<table>{{range .Env}}<tr><td><code>{{.Key}}</code></td><td>{{if .IsSecret}}<span class="mute">secret, hidden</span>{{else}}<code>{{.Value}}</code>{{end}}</td>
+<td><form method="post" action="/apps/{{$.App.Name}}/env/delete" data-confirm="Remove {{.Key}}?"><input type="hidden" name="key" value="{{.Key}}"><button class="plain">Remove</button></form></td></tr>
+{{else}}<tr><td class="mute">None yet.</td></tr>{{end}}</table>
+<form method="post" action="/apps/{{.App.Name}}/env">
+<div class="row"><input type="text" name="key" placeholder="KEY" required style="flex:1"><input type="password" name="value" placeholder="value" autocomplete="off" style="flex:2">
+<label style="margin:0"><input type="checkbox" name="secret" checked> secret</label><button>Save</button></div></form>
+<p class="mute">Saving an existing key replaces it. Changes apply on the next deploy.</p></div>
+<div class="card"><h2>Logs</h2>
+<div class="row"><button class="plain" id="logs-start" data-url="/apps/{{.App.Name}}/logs/stream">Show live logs</button><button class="plain" id="logs-stop" hidden>Stop</button></div>
+<pre id="logs" hidden></pre></div>
+<div class="card"><h2>Deploys</h2>
+{{range .Deploys}}<details {{if eq .Status "running"}}open{{end}}><summary><span class="{{.Status}}">{{.Status}}</span> · {{.Kind}} #{{.ID}} · {{.StartedAt.Format "2006-01-02 15:04"}}{{if .CommitSHA}} · {{printf "%.8s" .CommitSHA}}{{end}}</summary>
+{{if .CanRollback}}<form method="post" action="/apps/{{$.App.Name}}/rollback" data-confirm="Roll back to deploy #{{.ID}}? Database migrations are not undone."><input type="hidden" name="deploy_id" value="{{.ID}}"><button class="plain">Roll back to this</button></form>{{end}}
+<div hx-get="/deploys/{{.ID}}/log" hx-trigger="load{{if eq .Status "running"}}, every 2s{{end}}" hx-swap="innerHTML">…</div></details>
+{{else}}<p class="mute">No deploys yet.</p>{{end}}</div>{{end}}

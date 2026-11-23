@@ -1,0 +1,8 @@
+{{define "content"}}<div class="card" style="max-width:380px;margin:60px auto">
+<h1>Berth</h1>
+{{with .}}{{if .Error}}<p class="err">{{.Error}}</p>{{end}}{{end}}
+<form method="post" action="/login">
+<label>Username</label><input type="text" name="username" autocomplete="username" required autofocus>
+<label>Password</label><input type="password" name="password" autocomplete="current-password" required>
+<label>2FA code</label><input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required>
+<p><button>Log in</button></p></form></div>{{end}}

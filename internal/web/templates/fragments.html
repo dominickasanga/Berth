@@ -1,0 +1,2 @@
+{{define "status"}}{{if .Err}}<span class="err">{{.Err}}</span>{{else if .Out}}<pre>{{.Out}}</pre>{{else}}<span class="mute">not deployed</span>{{end}}{{end}}
+{{define "log"}}<pre>{{.Log}}</pre>{{end}}

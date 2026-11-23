@@ -1,0 +1,10 @@
+{{define "content"}}<h1>Register app</h1><div class="card">
+{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+<form method="post" action="/apps">
+<label>Name (lowercase, digits, dashes)</label><input type="text" name="name" value="{{.Form.Name}}" required>
+<label>Git repository URL</label><input type="text" name="repo_url" value="{{.Form.RepoURL}}" required>
+<label>Branch</label><input type="text" name="branch" value="{{.Form.Branch}}" required>
+<label>Subfolder in repo (optional)</label><input type="text" name="subfolder" value="{{.Form.Subfolder}}">
+<label>Compose file</label><input type="text" name="compose_file" value="{{.Form.ComposeFile}}" required>
+<label>Pre-deploy compose service (optional, e.g. migrate; a failure aborts the deploy)</label><input type="text" name="predeploy_svc" value="{{.Form.PredeploySvc}}">
+<p><button>Save</button></p></form></div>{{end}}

@@ -2,8 +2,13 @@
 
 # Berth
 
-> **Status:** planning done, no code yet. This file is the source of truth for the
-> next developer or AI agent picking this up. Read it fully before writing code.
+> **Status:** milestones 1 and 2 built (login with 2FA, app registry, env/secrets,
+> git deploy via compose, pre-deploy step, start/stop/restart, status, live
+> container logs, rollback). Not built yet: metrics and alerts, the managed
+> services (Postgres/Mongo/Redis/Docker), Kite360-specific actions. Not yet run
+> against the real Kite360 repos or a real server. This file is the source
+> of truth for the next developer or AI agent picking this up. Read it fully before
+> writing code.
 > Feasibility study (full reasoning, risk table, survey of every app in `/var/www`):
 > https://claude.ai/artifact/R2p1iKSzwNvipxbPa7e3mT
 
@@ -178,3 +183,58 @@ Learned from reading both Kite360 repos. Breaking any of these causes real damag
 2. Bring both up by hand with compose on a staging host with copies of the DB
    and media. Confirm previews, backups, email and SSE work.
 3. Only then start Berth's code: app registry + deploy + logs for these two.
+
+## 8. Running Berth (milestone 1)
+
+Code layout: `cmd/berth` (entry point), `internal/store` (Postgres + migrations),
+`internal/crypt` (AES-GCM for secrets), `internal/deploy` (git + compose engine),
+`internal/web` (UI: `html/template` + htmx, all embedded in the binary).
+
+```sh
+createdb berth                                  # dedicated database for Berth
+export BERTH_DATABASE_URL='postgres:///berth?host=/tmp'
+export BERTH_SECRET_KEY=$(openssl rand -base64 32)   # keep it: losing it makes stored secrets unreadable
+go build -o berth ./cmd/berth
+echo 'a-password-of-12+-chars' | ./berth admin-create dominic   # prints the 2FA URL for your authenticator app
+./berth serve                                   # http://127.0.0.1:8090
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BERTH_DATABASE_URL` | required | Berth's own Postgres database |
+| `BERTH_SECRET_KEY` | required | base64 of 32 bytes; encrypts secrets and 2FA seeds |
+| `BERTH_DATA_DIR` | `./data` | holds `checkouts/` and `env/` (env files are mode 0600, never inside a checkout) |
+| `BERTH_ADDR` | `127.0.0.1:8090` | listen address; put Traefik/TLS in front, never expose it plain |
+| `BERTH_COOKIE_SECURE` | `true` | set `false` only for local HTTP testing |
+| `BERTH_KEEP_IMAGES` | `5` | rollback image tags kept per image |
+| `BERTH_COMPOSE_CMD` | `docker compose` | use `docker-compose` if only the standalone v2 binary is installed |
+
+How a deploy treats the app's compose file:
+
+- Berth runs it as project `berth-<app>` with `--env-file` pointing at the stored
+  variables. A variable reaches a container only if the compose file references it
+  (`${NAME}` or `environment:`), as in any compose setup.
+- The pre-deploy service (for example `migrate`) must be declared with
+  `profiles: ["tools"]` so `compose up` does not also start it. Berth runs it with
+  `run --rm --no-deps`; if it exits non-zero the deploy stops before `up`, and the
+  old container keeps running.
+- Berth never runs `compose down` or `-v`; volumes survive deploys.
+- **Rollback:** after each build Berth keeps every image as `<repo>:berth-<deploy id>`
+  and prunes only those tags beyond `BERTH_KEEP_IMAGES`. "Roll back to this" on an
+  older successful deploy checks out its commit, re-tags its images and runs
+  `up --no-build`. If an image was pruned the button is hidden, and a failed
+  rollback changes nothing. The pre-deploy step is **not** run on rollback, so
+  database migrations are not undone.
+- **Logs:** "Show live logs" streams `compose logs -f` (last 200 lines, all
+  services) over server-sent events. A reverse proxy must not buffer it.
+
+Tests: `go test ./...`. The web test needs a scratch database:
+`createdb berth_test; BERTH_TEST_DATABASE_URL='postgres:///berth_test?host=/tmp' go test ./...`
+(it truncates that database's tables).
+
+Decided not to build: per-app deploy keys. Berth runs `git` as the user it runs as,
+so a private repo works only if that user already has access (SSH key, credential
+helper, or a token in the repo URL). Berth stores no git credentials.
+
+Known gaps in milestone 1: TOTP codes can be replayed within their 30-second
+window, login throttling is in memory, and all admins have equal rights.
