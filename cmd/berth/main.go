@@ -109,7 +109,14 @@ func main() {
 		}
 		expected, err := config.Expected()
 		must(err)
+		rawBase, set := os.LookupEnv("BERTH_BASE_PATH") // an empty value is allowed: serve at the site root
+		if !set {
+			rawBase = "/_berth"
+		}
+		basePath, err := web.NormalizeBase(rawBase)
+		must(err)
 		srv := &web.Server{
+			BasePath:     basePath,
 			Expected:     expected,
 			Store:        st,
 			Box:          box,
@@ -119,7 +126,7 @@ func main() {
 		h, err := srv.Handler()
 		must(err)
 		addr := env("BERTH_ADDR", "127.0.0.1:8090")
-		log.Printf("berth listening on %s (data dir %s)", addr, dataDir)
+		log.Printf("berth listening on http://%s%s/ (data dir %s)", addr, basePath, dataDir)
 		hs := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 		must(hs.ListenAndServe())
 

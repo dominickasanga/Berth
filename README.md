@@ -196,7 +196,7 @@ export BERTH_DATABASE_URL='postgres:///berth?host=/tmp'
 export BERTH_SECRET_KEY=$(openssl rand -base64 32)   # keep it: losing it makes stored secrets unreadable
 go build -o berth ./cmd/berth
 ./berth admin-create dominic   # asks for a password (min 8 chars, hidden), prints a 2FA QR code to scan
-./berth serve                                   # http://127.0.0.1:8090
+./berth serve                                   # http://127.0.0.1:8090/_berth/
 ```
 
 | Variable | Default | Meaning |
@@ -205,6 +205,7 @@ go build -o berth ./cmd/berth
 | `BERTH_SECRET_KEY` | required | base64 of 32 bytes; encrypts secrets and 2FA seeds |
 | `BERTH_DATA_DIR` | `./data` | holds `checkouts/` and `env/` (env files are mode 0600, never inside a checkout) |
 | `BERTH_ADDR` | `127.0.0.1:8090` | listen address; put Traefik/TLS in front, never expose it plain |
+| `BERTH_BASE_PATH` | `/_berth` | URL prefix Berth is served under, so the UI is at `https://host/_berth/`. Set it to an empty string (`BERTH_BASE_PATH=`) to serve at the site root. Letters, digits, `-`, `_`, `.` only |
 | `BERTH_COOKIE_SECURE` | `true` | set `false` only for local HTTP testing |
 | `BERTH_KEEP_IMAGES` | `5` | rollback image tags kept per image |
 | `BERTH_COMPOSE_CMD` | `docker compose` | use `docker-compose` if only the standalone v2 binary is installed |
@@ -212,8 +213,20 @@ go build -o berth ./cmd/berth
 How a deploy treats the app's compose file:
 
 - Berth runs it as project `berth-<app>` with `--env-file` pointing at the stored
-  variables. A variable reaches a container only if the compose file references it
-  (`${NAME}` or `environment:`), as in any compose setup.
+  variables, which feeds compose's `${NAME}` interpolation. Because many apps read a
+  `.env` through `env_file:` instead (Kite360 API does), Berth also writes a generated
+  override file (`BERTH_DATA_DIR/env/<app>.override.yml`) that sets every saved variable
+  in **every service's environment**, including services behind a profile such as
+  `migrate`. An `environment:` entry beats `env_file:`, so a variable saved in Berth
+  wins over the same name in the app's `.env`, and the `.env` itself is never edited.
+  The override holds only `${NAME}` references; values stay in the 0600 env file.
+  Remove a variable in Berth and the app's own `.env` value applies again.
+- **Containers cannot use `127.0.0.1` for host services.** A dev `.env` that points
+  `DATABASE_URL`, `RABBITMQ_URL` or the email endpoints at `127.0.0.1`/`localhost`
+  fails inside Docker ("connection refused"), because that address is the container.
+  Either edit the `.env` to use `host.docker.internal`, or leave the `.env` as it is
+  and save those variables in Berth instead. Postgres must also accept connections
+  from the Docker bridge (`listen_addresses`, `pg_hba.conf`).
 - The pre-deploy service (for example `migrate`) must be declared with
   `profiles: ["tools"]` so `compose up` does not also start it. Berth runs it with
   `run --rm --no-deps`; if it exits non-zero the deploy stops before `up`, and the
@@ -289,3 +302,22 @@ and `.git/HEAD`; it never runs anything in them.
   switching to a clone, Start/Stop/Logs may not work until you Deploy once.
 - **monitor** is recorded on the app and shown on its page. It does nothing until
   the metrics milestone is built.
+
+## 10. Base URL (`/_berth`)
+
+Berth serves everything under `BERTH_BASE_PATH` (default `/_berth`): pages, API,
+static files, redirects and the session cookie (limited to that path). Open
+`http://127.0.0.1:8090/_berth/`. The bare site root `/` redirects there; other paths
+outside the prefix return 404.
+
+Behind a reverse proxy, **pass the prefix through unchanged** (do not strip it), for
+example with Traefik:
+
+```yaml
+labels:
+  - traefik.http.routers.berth.rule=Host(`example.com`) && PathPrefix(`/_berth`)
+  - traefik.http.routers.berth.entrypoints=websecure
+  - traefik.http.services.berth.loadbalancer.server.port=8090
+```
+
+Live logs use server-sent events, so the proxy must not buffer responses for this path.

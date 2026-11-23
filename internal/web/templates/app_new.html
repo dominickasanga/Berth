@@ -1,7 +1,7 @@
-{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Apps</a>{{icon "chevron-right"}}<span aria-current="page">Register app</span></nav>{{end}}
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="{{base}}/">Apps</a>{{icon "chevron-right"}}<span aria-current="page">Register app</span></nav>{{end}}
 {{define "content"}}<h1>Register app</h1><div class="card">
 {{if .Error}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.Error}}</span></p>{{end}}
-<form method="post" action="/apps">
+<form method="post" action="{{base}}/apps">
 <label>Name (lowercase, digits, dashes)</label><input type="text" name="name" value="{{.Form.Name}}" required>
 <label>Git repository URL</label><input type="text" name="repo_url" value="{{.Form.RepoURL}}" required>
 <label>Branch</label><input type="text" name="branch" value="{{.Form.Branch}}" required>

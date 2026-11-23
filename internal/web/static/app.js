@@ -85,9 +85,10 @@ document.addEventListener('htmx:afterSwap', function (e) {
 
 // Highlight the current section in the top navigation.
 (function () {
-  var path = location.pathname;
+  var base = document.documentElement.getAttribute('data-base') || '';
+  var path = location.pathname.slice(base.length) || '/';
   document.querySelectorAll('header nav a').forEach(function (a) {
-    var href = a.getAttribute('href');
+    var href = a.getAttribute('href').slice(base.length) || '/';
     var here = href === '/' ? (path === '/' || path.indexOf('/apps') === 0) : path.indexOf(href) === 0;
     if (here) a.setAttribute('aria-current', 'page');
   });

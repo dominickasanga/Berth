@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,10 @@ func setup(t *testing.T) (*httptest.Server, string) {
 }
 
 func setupServer(t *testing.T) (*httptest.Server, string, *Server) {
+	return setupServerBase(t, "")
+}
+
+func setupServerBase(t *testing.T, base string) (*httptest.Server, string, *Server) {
 	dsn := os.Getenv("BERTH_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("BERTH_TEST_DATABASE_URL not set")
@@ -53,7 +58,7 @@ func setupServer(t *testing.T) (*httptest.Server, string, *Server) {
 	if err := st.CreateAdmin(ctx, "admin", string(hash), sealed); err != nil {
 		t.Fatal(err)
 	}
-	srv := &Server{Store: st, Box: box, Deploy: &deploy.Engine{Store: st, Box: box, DataDir: t.TempDir()}}
+	srv := &Server{Store: st, Box: box, BasePath: base, Deploy: &deploy.Engine{Store: st, Box: box, DataDir: t.TempDir()}}
 	h, err := srv.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -301,4 +306,106 @@ func TestDiscoverTwoCopiesNeedAFlag(t *testing.T) {
 		t.Fatalf("switching during a deploy must be refused, got %q", loc)
 	}
 	close(held)
+}
+
+func TestServedUnderBasePath(t *testing.T) {
+	ts, secret, _ := setupServerBase(t, "/_berth")
+	c := client()
+	get := func(path string, cookie *http.Cookie) (int, string, string) {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b), r.Header.Get("Location")
+	}
+
+	// the site root and the bare prefix lead to Berth; other paths outside the prefix do not exist
+	if code, _, loc := get("/", nil); code != 302 || loc != "/_berth/" {
+		t.Fatalf("/ should redirect to /_berth/, got %d %q", code, loc)
+	}
+	if code, _, loc := get("/_berth", nil); code != 302 || loc != "/_berth/" {
+		t.Fatalf("/_berth should redirect to /_berth/, got %d %q", code, loc)
+	}
+	if code, _, _ := get("/login", nil); code != 404 {
+		t.Fatalf("/login outside the prefix must be 404, got %d", code)
+	}
+	// protected pages send you to the prefixed login
+	if code, _, loc := get("/_berth/", nil); code != 303 || loc != "/_berth/login" {
+		t.Fatalf("expected redirect to /_berth/login, got %d %q", code, loc)
+	}
+	// static files are served under the prefix, and the login page links to them there
+	if code, _, _ := get("/_berth/static/app.css", nil); code != 200 {
+		t.Fatalf("static file under the prefix: %d", code)
+	}
+	code, page, _ := get("/_berth/login", nil)
+	if code != 200 || !strings.Contains(page, `action="/_berth/login"`) {
+		t.Fatalf("login page should post to the prefixed URL (%d)", code)
+	}
+
+	// log in
+	totpCode, _ := totp.GenerateCode(secret, time.Now())
+	resp, _ := c.PostForm(ts.URL+"/_berth/login", url.Values{"username": {"admin"}, "password": {"correct horse battery"}, "code": {totpCode}})
+	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/_berth/" {
+		t.Fatalf("login should redirect to /_berth/, got %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	cookie := resp.Cookies()[0]
+	if cookie.Path != "/_berth" {
+		t.Fatalf("session cookie should be limited to the prefix, got %q", cookie.Path)
+	}
+
+	// create an app, then check that no page links outside the prefix
+	post := func(path string, form url.Values) (int, string) {
+		req, _ := http.NewRequest("POST", ts.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		r, _ := c.Do(req)
+		return r.StatusCode, r.Header.Get("Location")
+	}
+	if code, loc := post("/_berth/apps", url.Values{"name": {"demo"}, "repo_url": {"https://example.com/r.git"}, "branch": {"main"}, "compose_file": {"docker-compose.yml"}}); code != 303 || loc != "/_berth/apps/demo" {
+		t.Fatalf("create app redirect: %d %q", code, loc)
+	}
+	bare := regexp.MustCompile(`(?:href|src|action|hx-get|data-url)="/(?:[^_]|_[^b])`)
+	for _, path := range []string{"/_berth/", "/_berth/apps/new", "/_berth/apps/demo", "/_berth/discover", "/_berth/apps/demo/status", "/_berth/apps/demo/status?view=compact"} {
+		code, body, _ := get(path, cookie)
+		if code != 200 {
+			t.Fatalf("%s: %d", path, code)
+		}
+		if m := bare.FindString(body); m != "" {
+			t.Errorf("%s has a link outside the base path: %s", path, m)
+		}
+		if strings.Contains(body, `href="/static/`) || strings.Contains(body, `src="/static/`) {
+			t.Errorf("%s links to /static outside the base path", path)
+		}
+	}
+	_, appPage, _ := get("/_berth/apps/demo", cookie)
+	for _, want := range []string{`data-base="/_berth"`, `hx-get="/_berth/apps/demo/status"`, `data-url="/_berth/apps/demo/logs/stream"`, `href="/_berth/static/icons.svg`} {
+		if !strings.Contains(appPage, want) && !strings.Contains(appPage, strings.Replace(want, `href="/_berth/static/icons.svg`, `href="/_berth/static/icons.svg`, 1)) {
+			t.Errorf("app page missing %s", want)
+		}
+	}
+	// the logged-out redirect for an htmx request also respects the prefix
+	req, _ := http.NewRequest("GET", ts.URL+"/_berth/apps/demo/status", nil)
+	req.Header.Set("HX-Request", "true")
+	r, _ := c.Do(req)
+	if r.Header.Get("HX-Redirect") != "/_berth/login" {
+		t.Fatalf("htmx redirect should be /_berth/login, got %q", r.Header.Get("HX-Redirect"))
+	}
+}
+
+func TestNormalizeBase(t *testing.T) {
+	for in, want := range map[string]string{"": "", "/": "", "/_berth": "/_berth", "_berth/": "/_berth", " /ops/berth ": "/ops/berth"} {
+		if got, err := NormalizeBase(in); err != nil || got != want {
+			t.Errorf("NormalizeBase(%q)=%q,%v want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"/a b", "/../x", "/x?y", "//host", `/x\`} {
+		if _, err := NormalizeBase(bad); err == nil {
+			t.Errorf("NormalizeBase(%q) should be rejected", bad)
+		}
+	}
 }

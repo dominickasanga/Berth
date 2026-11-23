@@ -2,7 +2,7 @@
 <p style="margin:0 0 8px" class="row">{{if eq .State "running"}}<span class="badge ok">Running</span>{{else if eq .State "stopped"}}<span class="badge warn">Stopped</span> <span class="mute">built and ready: click Start</span>{{else}}<span class="badge">Not deployed</span> <span class="mute">nothing is built yet: click Deploy</span>{{end}}
 {{with .Last}}<span class="mute">last {{.Kind}} #{{.ID}}</span> <span class="badge {{.Status}}">{{.Status}}</span>{{if .CommitSHA}} <span class="mute">{{printf "%.8s" .CommitSHA}}</span>{{end}}{{end}}</p>
 {{if .Services}}<table>{{range .Services}}<tr><td>{{icon "box"}} <code>{{.Service}}</code></td><td>{{if eq .State "running"}}<span class="badge ok">running{{if .Health}} · {{.Health}}{{end}}</span>{{else}}<span class="badge">{{.State}}</span>{{end}}</td><td class="mute">{{.Status}}</td></tr>{{end}}</table>{{end}}{{end}}
-<form class="row" method="post" action="/apps/{{.AppName}}/control" style="margin-top:12px">
+<form class="row" method="post" action="{{base}}/apps/{{.AppName}}/control" style="margin-top:12px">
 <button class="plain act-start" name="action" value="start" {{if not .CanStart}}disabled title="Start works only when the app is built and stopped"{{end}}>{{icon "play"}}Start</button>
 <button class="plain act-stop" name="action" value="stop" {{if not .CanStop}}disabled title="Nothing is running"{{end}}>{{icon "square"}}Stop</button>
 <button class="plain act-restart" name="action" value="restart" {{if not .CanRestart}}disabled title="Nothing is running"{{end}}>{{icon "rotate-cw"}}Restart</button>

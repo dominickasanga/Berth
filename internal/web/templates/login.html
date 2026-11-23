@@ -1,7 +1,7 @@
 {{define "content"}}<div class="card login">
-<div class="logo"><img src="/static/logo.svg?v={{v}}" alt=""><h1>Berth</h1></div>
+<div class="logo"><img src="{{base}}/static/logo.svg?v={{v}}" alt=""><h1>Berth</h1></div>
 {{with .}}{{if .Error}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.Error}}</span></p>{{end}}{{end}}
-<form method="post" action="/login">
+<form method="post" action="{{base}}/login">
 <label>Username</label><input type="text" name="username" autocomplete="username" required autofocus>
 <label>Password</label><input type="password" name="password" autocomplete="current-password" required>
 <label>2FA code</label><input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required>

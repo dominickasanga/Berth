@@ -164,3 +164,14 @@ func TestValidateExistingMode(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildOverrideHoldsReferencesOnly(t *testing.T) {
+	got := buildOverride([]string{"api", "migrate"}, []string{"DATABASE_URL", "TOKEN"})
+	want := "services:\n  api:\n    environment:\n      DATABASE_URL: \"${DATABASE_URL}\"\n      TOKEN: \"${TOKEN}\"\n  migrate:\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("unexpected override:\n%s", got)
+	}
+	if strings.Count(got, "${DATABASE_URL}") != 2 || strings.Contains(got, "postgres") {
+		t.Fatalf("override must hold references for every service and no values:\n%s", got)
+	}
+}

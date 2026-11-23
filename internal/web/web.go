@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +45,9 @@ type Server struct {
 	Deploy       *deploy.Engine
 	CookieSecure bool
 	Expected     []config.ExpectedApp
+	// BasePath is the URL prefix Berth is served under, e.g. "/_berth" ("" = the site root).
+	// The proxy in front must pass the prefix through unchanged.
+	BasePath string
 
 	tpl       map[string]*template.Template
 	dummyHash []byte
@@ -65,9 +69,10 @@ func (s *Server) Handler() (http.Handler, error) {
 	static, _ := fs.Sub(staticFS, "static")
 	ver := staticVersion(static)
 	funcs := template.FuncMap{
-		"v": func() string { return ver },
+		"v":    func() string { return ver },
+		"base": func() string { return s.BasePath },
 		"icon": func(name string) template.HTML { // one icon from the cached sprite
-			return template.HTML(`<svg class="i" aria-hidden="true" focusable="false"><use href="/static/icons.svg?v=` + ver + `#` + name + `"/></svg>`)
+			return template.HTML(`<svg class="i" aria-hidden="true" focusable="false"><use href="` + s.BasePath + `/static/icons.svg?v=` + ver + `#` + name + `"/></svg>`)
 		},
 	}
 	for _, page := range []string{"login", "apps", "app_new", "app", "discover"} {
@@ -106,7 +111,16 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /apps/{name}/env", s.auth(s.envSet))
 	mux.HandleFunc("POST /apps/{name}/env/delete", s.auth(s.envDelete))
 	mux.HandleFunc("GET /deploys/{id}/log", s.auth(s.deployLog))
-	return s.sameOrigin(secureHeaders(mux)), nil
+	h := s.sameOrigin(secureHeaders(mux))
+	if s.BasePath == "" {
+		return h, nil
+	}
+	root := http.NewServeMux()
+	root.Handle(s.BasePath+"/", http.StripPrefix(s.BasePath, h))
+	toBase := func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, s.BasePath+"/", http.StatusFound) }
+	root.HandleFunc("GET "+s.BasePath, toBase)
+	root.HandleFunc("GET /{$}", toBase) // the bare site root points people to Berth
+	return root, nil
 }
 
 // staticVersion hashes the embedded static files; pages link them as ?v=<hash>.
@@ -133,6 +147,34 @@ func cacheStatic(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// NormalizeBase validates a base path: "" or "/word" segments of letters, digits, "-", "_", ".".
+func NormalizeBase(b string) (string, error) {
+	b = strings.TrimSpace(b)
+	b = strings.TrimRight(b, "/")
+	if b == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(b, "/") {
+		b = "/" + b
+	}
+	if !regexp.MustCompile(`^(/[A-Za-z0-9._-]+)+$`).MatchString(b) || strings.Contains(b, "..") {
+		return "", errors.New("base path may only contain letters, digits, '-', '_', '.' and '/' segments, e.g. /_berth")
+	}
+	return b, nil
+}
+
+func (s *Server) cookiePath() string {
+	if s.BasePath == "" {
+		return "/"
+	}
+	return s.BasePath
+}
+
+// redirect sends the browser to a path inside Berth (the base path is added).
+func (s *Server) redirect(w http.ResponseWriter, r *http.Request, target string) {
+	http.Redirect(w, r, s.BasePath+target, http.StatusSeeOther)
 }
 
 func secureHeaders(next http.Handler) http.Handler {
@@ -171,10 +213,10 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, *store.Admin
 			}
 		}
 		if r.Header.Get("HX-Request") != "" {
-			w.Header().Set("HX-Redirect", "/login")
+			w.Header().Set("HX-Redirect", s.BasePath+"/login")
 			return
 		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		s.redirect(w, r, "/login")
 	}
 }
 
@@ -265,18 +307,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	delete(s.fails, user)
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true,
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: s.cookiePath(), HttpOnly: true,
 		Secure: s.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: 12 * 3600})
 	s.Store.Audit(r.Context(), a.Username, "login", "")
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	s.redirect(w, r, "/")
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, a *store.Admin) {
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.Store.DeleteSession(r.Context(), c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: s.cookiePath(), MaxAge: -1})
+	s.redirect(w, r, "/login")
 }
 
 // ---- apps ----
@@ -317,7 +359,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request, a *store.Admi
 		return
 	}
 	s.Store.Audit(r.Context(), a.Username, "app.create", app.Name)
-	http.Redirect(w, r, "/apps/"+app.Name, http.StatusSeeOther)
+	s.redirect(w, r, "/apps/"+app.Name)
 }
 
 type envRow struct {
@@ -412,7 +454,7 @@ func (s *Server) appDeploy(w http.ResponseWriter, r *http.Request, a *store.Admi
 		return
 	}
 	s.Store.Audit(r.Context(), a.Username, "app.deploy", app.Name)
-	http.Redirect(w, r, "/apps/"+app.Name+"?msg=deploy+"+strconv.FormatInt(id, 10)+"+started", http.StatusSeeOther)
+	s.redirect(w, r, "/apps/"+app.Name+"?msg=deploy+"+strconv.FormatInt(id, 10)+"+started")
 }
 
 func (s *Server) appControl(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -429,10 +471,10 @@ func (s *Server) appControl(w http.ResponseWriter, r *http.Request, a *store.Adm
 		if len(detail) > 1500 {
 			detail = "…" + detail[len(detail)-1500:]
 		}
-		http.Redirect(w, r, "/apps/"+app.Name+"?err="+url.QueryEscape(action+" failed ("+err.Error()+"):\n"+detail), http.StatusSeeOther)
+		s.redirect(w, r, "/apps/"+app.Name+"?err="+url.QueryEscape(action+" failed ("+err.Error()+"):\n"+detail))
 		return
 	}
-	http.Redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape(action+" ok"), http.StatusSeeOther)
+	s.redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape(action+" ok"))
 }
 
 func (s *Server) envSet(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -454,7 +496,7 @@ func (s *Server) envSet(w http.ResponseWriter, r *http.Request, a *store.Admin) 
 		return
 	}
 	s.Store.Audit(r.Context(), a.Username, "env.set", app.Name+":"+key)
-	http.Redirect(w, r, "/apps/"+app.Name+"?msg=saved+"+url.QueryEscape(key)+"+(applies+on+next+deploy)", http.StatusSeeOther)
+	s.redirect(w, r, "/apps/"+app.Name+"?msg=saved+"+url.QueryEscape(key)+"+(applies+on+next+deploy)")
 }
 
 func (s *Server) envDelete(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -465,7 +507,7 @@ func (s *Server) envDelete(w http.ResponseWriter, r *http.Request, a *store.Admi
 	key := r.FormValue("key")
 	s.Store.DeleteEnv(r.Context(), app.ID, key)
 	s.Store.Audit(r.Context(), a.Username, "env.delete", app.Name+":"+key)
-	http.Redirect(w, r, "/apps/"+app.Name, http.StatusSeeOther)
+	s.redirect(w, r, "/apps/"+app.Name)
 }
 
 func (s *Server) deployLog(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -494,7 +536,7 @@ func (s *Server) appRollback(w http.ResponseWriter, r *http.Request, a *store.Ad
 		return
 	}
 	s.Store.Audit(r.Context(), a.Username, "app.rollback", app.Name+" to deploy "+strconv.FormatInt(target, 10))
-	http.Redirect(w, r, "/apps/"+app.Name+"?msg=rollback+"+strconv.FormatInt(id, 10)+"+started", http.StatusSeeOther)
+	s.redirect(w, r, "/apps/"+app.Name+"?msg=rollback+"+strconv.FormatInt(id, 10)+"+started")
 }
 
 // logStream sends `compose logs -f` as server-sent events until the browser disconnects.
@@ -590,14 +632,14 @@ func (s *Server) discoverPage(w http.ResponseWriter, r *http.Request, a *store.A
 		"Flash": r.URL.Query().Get("msg"), "Error": r.URL.Query().Get("err")})
 }
 
-func discoverRedirect(w http.ResponseWriter, r *http.Request, key, msg string) {
-	http.Redirect(w, r, "/discover?"+key+"="+url.QueryEscape(msg), http.StatusSeeOther)
+func (s *Server) discoverRedirect(w http.ResponseWriter, r *http.Request, key, msg string) {
+	s.redirect(w, r, "/discover?"+key+"="+url.QueryEscape(msg))
 }
 
 func (s *Server) discoverAddPath(w http.ResponseWriter, r *http.Request, a *store.Admin) {
 	p := strings.TrimSpace(r.FormValue("path"))
 	if p == "" || !filepath.IsAbs(p) || strings.ContainsRune(p, 0) {
-		discoverRedirect(w, r, "err", "Enter an absolute folder path such as /var/www")
+		s.discoverRedirect(w, r, "err", "Enter an absolute folder path such as /var/www")
 		return
 	}
 	p = filepath.Clean(p)
@@ -606,14 +648,14 @@ func (s *Server) discoverAddPath(w http.ResponseWriter, r *http.Request, a *stor
 		return
 	}
 	s.Store.Audit(r.Context(), a.Username, "scanpath.add", p)
-	discoverRedirect(w, r, "msg", "Added "+p)
+	s.discoverRedirect(w, r, "msg", "Added "+p)
 }
 
 func (s *Server) discoverDeletePath(w http.ResponseWriter, r *http.Request, a *store.Admin) {
 	p := r.FormValue("path")
 	s.Store.DeleteScanPath(r.Context(), p)
 	s.Store.Audit(r.Context(), a.Username, "scanpath.delete", p)
-	discoverRedirect(w, r, "msg", "Removed "+p)
+	s.discoverRedirect(w, r, "msg", "Removed "+p)
 }
 
 func (s *Server) expectedByName(name string) *config.ExpectedApp {
@@ -642,11 +684,11 @@ func (s *Server) discoverChoose(w http.ResponseWriter, r *http.Request, a *store
 		if c.Path == path {
 			s.Store.SetChoice(r.Context(), x.Name, path)
 			s.Store.Audit(r.Context(), a.Username, "discover.choose", x.Name+" -> "+path)
-			discoverRedirect(w, r, "msg", "Using "+path+" for "+x.Title)
+			s.discoverRedirect(w, r, "msg", "Using "+path+" for "+x.Title)
 			return
 		}
 	}
-	discoverRedirect(w, r, "err", "That folder was not found in this scan; nothing was changed.")
+	s.discoverRedirect(w, r, "err", "That folder was not found in this scan; nothing was changed.")
 }
 
 func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -663,7 +705,7 @@ func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *sto
 	}
 	mode := r.FormValue("mode")
 	if mode != "existing" && mode != "clone" {
-		discoverRedirect(w, r, "err", "Choose how to run "+x.Title+": use the existing folder, or clone a new copy.")
+		s.discoverRedirect(w, r, "err", "Choose how to run "+x.Title+": use the existing folder, or clone a new copy.")
 		return
 	}
 	app := store.App{Name: x.Name, RepoURL: x.Repo, Branch: x.Branch, Subfolder: x.Subfolder,
@@ -671,11 +713,11 @@ func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *sto
 	c, need := discover.Resolve(found[x.Name], choices[x.Name])
 	if mode == "existing" {
 		if need {
-			discoverRedirect(w, r, "err", x.Title+" was found in more than one place. Flag the copy to use first.")
+			s.discoverRedirect(w, r, "err", x.Title+" was found in more than one place. Flag the copy to use first.")
 			return
 		}
 		if ok, why := existingOK(c); !ok {
-			discoverRedirect(w, r, "err", "Cannot use the existing folder: "+why+". Clone a new copy instead.")
+			s.discoverRedirect(w, r, "err", "Cannot use the existing folder: "+why+". Clone a new copy instead.")
 			return
 		}
 		app.SourcePath, app.RepoURL, app.Branch = c.Path, c.Remote, c.Branch // the folder is the source of truth
@@ -693,11 +735,11 @@ func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *sto
 		err = s.Store.CreateApp(r.Context(), app)
 	}
 	if err != nil {
-		discoverRedirect(w, r, "err", "Could not register "+x.Title+": already registered or invalid settings.")
+		s.discoverRedirect(w, r, "err", "Could not register "+x.Title+": already registered or invalid settings.")
 		return
 	}
 	s.Store.Audit(r.Context(), a.Username, "app.create", app.Name+" (discovered)")
-	http.Redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape("registered from discovery"), http.StatusSeeOther)
+	s.redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape("registered from discovery"))
 }
 
 // existingCandidate finds the on-disk folder an app could run from, and says why not if none fits.
@@ -748,7 +790,7 @@ func (s *Server) appSource(w http.ResponseWriter, r *http.Request, a *store.Admi
 		return
 	}
 	back := func(key, msg string) {
-		http.Redirect(w, r, "/apps/"+app.Name+"?"+key+"="+url.QueryEscape(msg), http.StatusSeeOther)
+		s.redirect(w, r, "/apps/"+app.Name+"?"+key+"="+url.QueryEscape(msg))
 	}
 	mode := r.FormValue("mode")
 	if mode != "existing" && mode != "clone" {
