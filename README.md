@@ -151,6 +151,51 @@ Learned from reading both Kite360 repos. Breaking any of these causes real damag
 - Source of truth for the API's behaviour: `Kite360-API/go-api/PORT_STATUS.md`
   ("Production topology") and `Kite360-API/README.md` ("Running it in Docker").
 
+### What production actually looks like (checked on the `erp` server, 2026-11-23)
+
+- **Docker Compose is v1 only** (`docker-compose` 1.29.2, no `docker compose` plugin).
+  Berth needs **Compose v2** (2.24 or newer): it uses `up --wait`, several `--env-file`
+  flags and `--profile "*"`. Install the v2 plugin before using Berth there; v1 keeps
+  working beside it for the stacks it already runs.
+- **The Kite360 API (port 8001) and the NyasaHub API (port 8090) run as host processes**
+  (a binary named `main`), not in Docker. They use the **host's** PostgreSQL (0.0.0.0:5432),
+  Redis (127.0.0.1:6379), MongoDB (127.0.0.1:27017) and RabbitMQ (*:5672). Redis and
+  Mongo listen on loopback only, so a bridge-network container cannot reach them through
+  `host.docker.internal`; a container would need `network_mode: host` or those services
+  would have to listen on the Docker bridge.
+- **NyasaHub API's own compose file is a self-contained dev stack** (its own Postgres,
+  Redis, Mongo and RabbitMQ containers on 5432, 6379, 27017, 5672, 15672). It does not
+  match production and would clash with the host services above. Do not deploy it there.
+- **Berth's default port 8090 is already taken in production** by the NyasaHub API, so
+  Berth must listen on another port there (set `BERTH_ADDR`). The NyasaHub API keeps 8090.
+- Running containers are not Berth projects: `nyasahub-web` (plain `docker run`, port 3000),
+  `tams-nuxt_proworkwave_erp_1` (Kite360 web, an old compose project, port 3024), plus
+  Traefik v2.10 on 80/443/8080 and Gotenberg on 127.0.0.1:3025. Moving an app under Berth
+  means stopping its old container first (do not remove it, so you can go back), because
+  Berth's project is `berth-<app>` and the host port would otherwise be taken.
+
+### Decisions for the first four apps (2026-11-23)
+
+- **Berth starts with four apps:** Kite360 (web, API) and NyasaHub (web, API).
+- **PostgreSQL stays on the host for now**, and no other support service (Redis, MongoDB,
+  RabbitMQ) moves into Docker yet. The apps keep using the host's services. When that
+  changes, the plan is one separate "data services" compose project on a shared Docker
+  network, with volumes Berth never removes, no host ports, and apps connecting by service
+  name. Moving existing data from the host Postgres means a dump, a restore and a short
+  downtime window. The managed-services features (status, backups, restore, create
+  database/user, metrics) are **not built yet**.
+- **Kite360 API** in Docker reaches the host's Postgres and RabbitMQ through
+  `host.docker.internal` (they listen on all interfaces; Postgres also needs `pg_hba.conf`
+  to allow the Docker bridge).
+- **NyasaHub API** needs the host's Redis and Mongo, which listen on loopback only, so its
+  production compose file (`deployments/docker/docker-compose.prod.yml`, in its repo) runs
+  only the API with `network_mode: host`. It mounts the repo's `static/` folder so uploads
+  survive redeploys. The old host process on port 8090 must be stopped first, and
+  migrations (`make migrate-apply`, Atlas) are still run by hand.
+- **NyasaHub web** has `docker-compose.yml` (publishes 3000; the live `nyasahub-web`
+  container must be stopped first).
+- Berth refuses to start on Compose v1 and says how to install v2.
+
 ## 5. Known issues in the wider estate (for later phases)
 
 - Real `.env` files are committed in MEMIS, SB-Metrics, SB-Web-APP,

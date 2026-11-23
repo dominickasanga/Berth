@@ -27,3 +27,22 @@ apps:
     folder_names: [kite360-api]
     public_url: https://proworkwave.com/api2/
     monitor: true
+
+  - name: nyasahub-api
+    title: NyasaHub API
+    repo: https://github.com/dominickasanga/NyasaHub-API-Core
+    branch: main
+    subfolder: deployments/docker       # the compose files live here, next to its Dockerfile
+    # The API only, on the host network, using the host's Postgres/Redis/Mongo/RabbitMQ.
+    # (docker-compose.yml here is a self-contained dev stack with its own databases.)
+    compose_file: docker-compose.prod.yml
+    folder_names: [nyasahub-api-core, nyasahub-api]
+    monitor: true
+
+  - name: nyasahub-web
+    title: NyasaHub web
+    repo: https://github.com/dominickasanga/NyasaHub-Web-APP
+    branch: main
+    compose_file: docker-compose.yml
+    folder_names: [nyasahub-web-app, nyasahub-web]
+    monitor: true

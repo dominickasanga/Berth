@@ -99,6 +99,15 @@ func main() {
 		fmt.Printf("Can't scan? Enter this key manually (time-based, 6 digits): %s\n", key.Secret())
 
 	case "serve":
+		composeCmd := strings.Fields(env("BERTH_COMPOSE_CMD", "docker compose"))
+		if v, warn, err := deploy.CheckCompose(composeCmd); err != nil {
+			log.Fatal(err)
+		} else {
+			log.Printf("docker compose %s", v)
+			if warn != "" {
+				log.Print("warning: " + warn)
+			}
+		}
 		dataDir, err := filepath.Abs(env("BERTH_DATA_DIR", "./data"))
 		must(err)
 		must(os.MkdirAll(dataDir, 0o700))
@@ -120,7 +129,7 @@ func main() {
 			Expected:     expected,
 			Store:        st,
 			Box:          box,
-			Deploy:       &deploy.Engine{Store: st, Box: box, DataDir: dataDir, ComposeCmd: strings.Fields(env("BERTH_COMPOSE_CMD", "docker compose")), KeepImages: keepImages},
+			Deploy:       &deploy.Engine{Store: st, Box: box, DataDir: dataDir, ComposeCmd: composeCmd, KeepImages: keepImages},
 			CookieSecure: env("BERTH_COOKIE_SECURE", "true") != "false",
 		}
 		h, err := srv.Handler()

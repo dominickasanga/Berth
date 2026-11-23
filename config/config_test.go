@@ -7,8 +7,17 @@ func TestEmbeddedListIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(apps) != 2 || apps[0].Name != "kite360-web" || apps[1].Name != "kite360-api" {
+	want := []string{"kite360-web", "kite360-api", "nyasahub-api", "nyasahub-web"}
+	if len(apps) != len(want) {
 		t.Fatalf("unexpected list: %+v", apps)
+	}
+	for i, n := range want {
+		if apps[i].Name != n {
+			t.Fatalf("entry %d is %q, want %q", i, apps[i].Name, n)
+		}
+	}
+	if apps[2].Subfolder != "deployments/docker" || apps[2].ComposeFile != "docker-compose.prod.yml" {
+		t.Errorf("NyasaHub API must use the production compose file, got %q in %q", apps[2].ComposeFile, apps[2].Subfolder)
 	}
 	for _, a := range apps {
 		if !a.Monitor {

@@ -175,3 +175,38 @@ func TestBuildOverrideHoldsReferencesOnly(t *testing.T) {
 		t.Fatalf("override must hold references for every service and no values:\n%s", got)
 	}
 }
+
+func TestParseComposeVersion(t *testing.T) {
+	for in, want := range map[string][2]int{
+		"2.39.1": {2, 39}, "v2.29.7\n": {2, 29}, "1.29.2": {1, 29}, "2.24.0-desktop.1": {2, 24},
+	} {
+		major, minor, ok := parseComposeVersion(in)
+		if !ok || major != want[0] || minor != want[1] {
+			t.Errorf("parseComposeVersion(%q)=%d.%d,%v want %v", in, major, minor, ok, want)
+		}
+	}
+	if _, _, ok := parseComposeVersion("no version here"); ok {
+		t.Error("garbage must not parse")
+	}
+}
+
+func TestCheckComposeRefusesV1AndAcceptsV2(t *testing.T) {
+	dir := t.TempDir()
+	fake := func(name, out string) []string {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte("#!/bin/sh\necho "+out+"\n"), 0o755)
+		return []string{p}
+	}
+	if _, _, err := CheckCompose(fake("v1", "1.29.2")); err == nil || !strings.Contains(err.Error(), "needs Compose v2") {
+		t.Fatalf("v1 must be refused, got %v", err)
+	}
+	if v, warn, err := CheckCompose(fake("v2", "2.39.1")); err != nil || warn != "" || v != "2.39" {
+		t.Fatalf("v2.39 should pass cleanly: %s %q %v", v, warn, err)
+	}
+	if _, warn, err := CheckCompose(fake("old", "2.20.3")); err != nil || warn == "" {
+		t.Fatalf("v2.20 should warn, got %q %v", warn, err)
+	}
+	if _, _, err := CheckCompose([]string{filepath.Join(dir, "missing")}); err == nil || !strings.Contains(err.Error(), "install the docker-compose-plugin") {
+		t.Fatalf("a missing command should explain the fix, got %v", err)
+	}
+}
