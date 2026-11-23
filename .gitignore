@@ -1,3 +1,4 @@
 /data/
 /berth
 *.env
+/berth-*

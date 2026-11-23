@@ -175,6 +175,20 @@ Learned from reading both Kite360 repos. Breaking any of these causes real damag
   means stopping its old container first (do not remove it, so you can go back), because
   Berth's project is `berth-<app>` and the host port would otherwise be taken.
 
+### Server inventory (checked on `erp`, 2026-11-23)
+
+- **Machine:** Ubuntu 22.04.5 LTS, x86_64, KVM, 14 vCPU, 15 GiB RAM (about 11 GiB available), `/` 22 GB free,
+  `/mnt/blockvolume` 66 GB free. The clock is UTC and synchronized, so alert emails and the Audit page show UTC.
+- **Docker** server 27.5.1 (client 29.1.3). **Compose: v1 (1.29.2) only**, so the v2 plugin still has to be installed.
+- **Host services:** PostgreSQL 14.24 (cluster `14-main`), Redis 6.0.16, MongoDB 8.0.12, RabbitMQ, nginx, all
+  systemd units. RabbitMQ's management port 15672 is closed. Backups will need `pg_dump` 14, not the 17 the
+  plan above assumed (set `PG_MAJOR=14` when that is built).
+- **Go 1.27.3 is installed**, so Berth can be built on the server (`go build -o berth ./cmd/berth`); a
+  cross-compiled binary is not required.
+- **The Kite360 API (8001) and the NyasaHub API (8090) are not systemd units** (no unit matches). How they are
+  started is still to be found out before they are moved under Berth.
+- The user `ubuntu` is in the `docker` and `sudo` groups. Port 8095 is free. GopherPost listens on `*:8787`.
+
 ### Decisions for the first four apps (2026-11-23)
 
 - **Berth starts with four apps:** Kite360 (web, API) and NyasaHub (web, API).
@@ -258,7 +272,7 @@ go build -o berth ./cmd/berth
 | `BERTH_DATABASE_URL` | required | Berth's own Postgres database |
 | `BERTH_SECRET_KEY` | required | base64 of 32 bytes; encrypts secrets and 2FA seeds |
 | `BERTH_DATA_DIR` | `./data` | holds `checkouts/` and `env/` (env files are mode 0600, never inside a checkout) |
-| `BERTH_ADDR` | `127.0.0.1:8095` | listen address (8090 is taken by the NyasaHub API on the server); put Traefik/TLS in front, never expose it plain |
+| `BERTH_ADDR` | `127.0.0.1:8095` | listen address (8090 is taken by the NyasaHub API on the server). `127.0.0.1` keeps it private (reach it over an SSH tunnel). `0.0.0.0` makes it reachable from the network: Berth can control Docker on the whole server, so only do that with HTTPS in front and a firewall allowing your own IP, and Berth logs a warning when it is exposed over plain HTTP |
 | `BERTH_METRICS_INTERVAL` | `30` | seconds between checks of each monitored service (minimum 5) |
 | `BERTH_METRICS_RETENTION_DAYS` | `7` | how long samples are kept |
 | `BERTH_SMTP_HOST`, `BERTH_SMTP_PORT` (587), `BERTH_SMTP_USER`, `BERTH_SMTP_PASS`, `BERTH_SMTP_FROM`, `BERTH_ALERT_TO` | unset | alert email. Both host and `BERTH_ALERT_TO` (comma-separated) are needed. STARTTLS is used when offered; port 465 uses TLS. Without them alerts are shown on the Services page only |

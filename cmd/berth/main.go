@@ -188,6 +188,9 @@ func main() {
 		if logPath != "" {
 			log.Printf("logging to %s", logPath)
 		}
+		if web.PlainHTTPExposed(addr, srv.CookieSecure) {
+			log.Printf("WARNING: listening on %s over plain HTTP: passwords, 2FA codes and sessions are not encrypted, and anyone who can reach this port can try to log in. Restrict it with a firewall (your IP only) or put HTTPS in front and set BERTH_COOKIE_SECURE=true", addr)
+		}
 		log.Printf("berth listening on http://%s%s/ (data dir %s)", addr, basePath, dataDir)
 		hs := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 		must(hs.ListenAndServe())
