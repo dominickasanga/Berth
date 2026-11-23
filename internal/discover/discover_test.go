@@ -99,3 +99,49 @@ func TestResolve(t *testing.T) {
 		t.Error("nothing found is not a choice")
 	}
 }
+
+func TestScanOthersFindsComposeFoldersNotExpected(t *testing.T) {
+	root := t.TempDir()
+	mk := func(rel, content string) {
+		p := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(content), 0o644)
+	}
+	mk("Other App/docker-compose.yml", "services: {}")
+	mk("Other App/.git/config", "[remote \"origin\"]\n\turl = git@github.com:me/other.git\n")
+	mk("Other App/.git/HEAD", "ref: refs/heads/dev\n")
+	mk("deep/deployments/docker/docker-compose.prod.yml", "services: {}")
+	mk("deep/deployments/docker/docker-compose.yml", "services: {}")
+	mk("kite360-api/go-api/docker-compose.yml", "services: {}")      // expected app: not "other"
+	mk("nodejs/node_modules/lib/docker-compose.yml", "services: {}") // inside node_modules: ignored
+	mk("too/a/b/c/docker-compose.yml", "services: {}")               // three folders down: ignored
+	mk("plain/README.md", "x")                                       // no compose file
+	mk("registered/compose.yaml", "services: {}")                    // already registered: skipped
+
+	got := ScanOthers([]string{root}, expected, map[string]bool{filepath.Join(root, "registered"): true})
+	names := []string{}
+	for _, o := range got {
+		names = append(names, o.Folder)
+	}
+	if len(got) != 2 || got[0].Folder != "deep" || got[1].Folder != "Other App" {
+		t.Fatalf("want [deep, Other App], got %v", names)
+	}
+	deep, other := got[0], got[1]
+	if len(deep.Composes) != 2 || deep.Composes[0] != "deployments/docker/docker-compose.prod.yml" {
+		t.Errorf("compose files should be listed shallowest first then by name: %v", deep.Composes)
+	}
+	if deep.HasGit || deep.SuggestedName != "deep" {
+		t.Errorf("deep: %+v", deep)
+	}
+	if !other.HasGit || other.Remote != "git@github.com:me/other.git" || other.Branch != "dev" || other.SuggestedName != "other-app" {
+		t.Errorf("other: %+v", other)
+	}
+}
+
+func TestSlug(t *testing.T) {
+	for in, want := range map[string]string{"Other App": "other-app", "SB-Web-APP": "sb-web-app", "couchdb_3.5_install": "couchdb-3-5-install", "--x--": "x"} {
+		if got := Slug(in); got != want {
+			t.Errorf("Slug(%q)=%q want %q", in, got, want)
+		}
+	}
+}

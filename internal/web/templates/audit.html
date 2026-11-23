@@ -1,0 +1,8 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="{{base}}/">Apps</a>{{icon "chevron-right"}}<span aria-current="page">Audit</span></nav>{{end}}
+{{define "content"}}<h1>Audit</h1>
+<p class="mute">Who did what, and when: logins, deploys, rollbacks, variable changes and more. Newest first. Secret values are never recorded.</p>
+<div class="card">
+{{if .Rows}}<table><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th></tr>
+{{range .Rows}}<tr><td class="mute" style="white-space:nowrap">{{.At.Format "2006-01-02 15:04:05"}}</td><td>{{.Who}}</td><td><code>{{.Action}}</code></td><td>{{.Target}}</td></tr>{{end}}</table>
+{{if .Next}}<p style="margin:12px 0 0"><a class="btn" href="{{base}}/audit?before={{.Next}}">Older entries</a></p>{{end}}
+{{else}}<p class="mute">Nothing recorded yet.</p>{{end}}</div>{{end}}

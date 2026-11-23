@@ -9,3 +9,8 @@
 <button type="button" class="plain act-logs" data-open-logs {{if eq .State "none"}}disabled title="Nothing is deployed yet, so there are no logs"{{end}}>{{icon "terminal"}}Logs</button></form>{{end}}
 {{define "status-compact"}}{{if .Err}}<span class="badge bad">unavailable</span>{{else if eq .State "running"}}<span class="badge ok">Running</span>{{else if eq .State "stopped"}}<span class="badge warn">Stopped</span>{{else}}<span class="badge">Not deployed</span>{{end}}{{end}}
 {{define "log"}}<pre>{{.Log}}</pre>{{end}}
+{{define "svc-test"}}{{if .Problem}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.Problem}}</span></p>
+{{else if .Up}}<p class="alert ok">{{icon "circle-check"}}<span>Connected. Nothing was saved yet.</span></p>
+{{if .Stats}}<dl class="stats">{{range .Stats}}<div><dt>{{.Title}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
+{{if .Info}}<table>{{range .Info}}<tr><td class="mute" style="width:30%;text-transform:capitalize">{{.Title}}</td><td>{{.Value}}</td></tr>{{end}}</table>{{end}}
+{{else}}<p class="alert bad">{{icon "triangle-alert"}}<span>Could not connect: {{.Err}}</span></p>{{end}}{{end}}

@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -142,13 +143,15 @@ type App struct {
 	SourcePath   string
 	Monitor      bool
 	SourceMode   string // "clone" (Berth's own clone) or "existing" (the folder in SourcePath)
+	// ComposeProject is the compose project name; empty means "berth-<name>".
+	ComposeProject string
 }
 
-const appCols = `id, name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor, source_mode`
+const appCols = `id, name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor, source_mode, compose_project`
 
 func scanApp(row pgx.Row) (*App, error) {
 	a := &App{}
-	err := row.Scan(&a.ID, &a.Name, &a.RepoURL, &a.Branch, &a.Subfolder, &a.ComposeFile, &a.PredeploySvc, &a.SourcePath, &a.Monitor, &a.SourceMode)
+	err := row.Scan(&a.ID, &a.Name, &a.RepoURL, &a.Branch, &a.Subfolder, &a.ComposeFile, &a.PredeploySvc, &a.SourcePath, &a.Monitor, &a.SourceMode, &a.ComposeProject)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -159,8 +162,8 @@ func (s *Store) CreateApp(ctx context.Context, a App) error {
 	if a.SourceMode == "" {
 		a.SourceMode = "clone"
 	}
-	_, err := s.Pool.Exec(ctx, `INSERT INTO apps (name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor, source_mode)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, a.Name, a.RepoURL, a.Branch, a.Subfolder, a.ComposeFile, a.PredeploySvc, a.SourcePath, a.Monitor, a.SourceMode)
+	_, err := s.Pool.Exec(ctx, `INSERT INTO apps (name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor, source_mode, compose_project)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, a.Name, a.RepoURL, a.Branch, a.Subfolder, a.ComposeFile, a.PredeploySvc, a.SourcePath, a.Monitor, a.SourceMode, a.ComposeProject)
 	return err
 }
 
@@ -363,4 +366,30 @@ func (s *Store) DeployByID(ctx context.Context, id int64) (*Deploy, error) {
 
 func (s *Store) Audit(ctx context.Context, who, action, target string) {
 	s.Pool.Exec(ctx, `INSERT INTO audit_log (who, action, target) VALUES ($1,$2,$3)`, who, action, target)
+	log.Printf("audit: %s %s %s", who, action, target)
+}
+
+type AuditRow struct {
+	ID                  int64
+	At                  time.Time
+	Who, Action, Target string
+}
+
+// ListAudit returns the newest audit rows first; before > 0 pages back to rows older than that id.
+func (s *Store) ListAudit(ctx context.Context, limit int, before int64) ([]AuditRow, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, at, who, action, target FROM audit_log
+		WHERE ($2 = 0 OR id < $2) ORDER BY id DESC LIMIT $1`, limit, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuditRow
+	for rows.Next() {
+		var r AuditRow
+		if err := rows.Scan(&r.ID, &r.At, &r.Who, &r.Action, &r.Target); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

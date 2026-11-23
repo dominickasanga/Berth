@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +73,9 @@ func ValidateApp(a store.App) error {
 	if a.PredeploySvc != "" && !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(a.PredeploySvc) {
 		return fmt.Errorf("%w: pre-deploy service", ErrBadInput)
 	}
+	if a.ComposeProject != "" && !projectRe.MatchString(a.ComposeProject) {
+		return fmt.Errorf("%w: compose project name", ErrBadInput)
+	}
 	switch a.SourceMode {
 	case "", "clone":
 	case "existing":
@@ -101,6 +105,17 @@ func (e *Engine) composeCtx(ctx context.Context, a store.App, args ...string) *e
 	return e.composeCmd(ctx, a, true, args...)
 }
 
+var projectRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+
+// ProjectName is the compose project: the app's own setting (to adopt an existing stack and
+// keep its containers and named volumes), or "berth-<name>".
+func ProjectName(a store.App) string {
+	if a.ComposeProject != "" {
+		return a.ComposeProject
+	}
+	return "berth-" + a.Name
+}
+
 // overrideFile is the generated compose override that injects variables saved in Berth.
 func (e *Engine) overrideFile(a store.App) string {
 	return filepath.Join(e.DataDir, "env", a.Name+".override.yml")
@@ -108,7 +123,7 @@ func (e *Engine) overrideFile(a store.App) string {
 
 func (e *Engine) composeCmd(ctx context.Context, a store.App, withOverride bool, args ...string) *exec.Cmd {
 	dir := filepath.Join(e.checkoutDir(a), a.Subfolder)
-	base := []string{"-p", "berth-" + a.Name, "-f", filepath.Join(dir, a.ComposeFile)}
+	base := []string{"-p", ProjectName(a), "-f", filepath.Join(dir, a.ComposeFile)}
 	if _, err := os.Stat(e.overrideFile(a)); err == nil && withOverride {
 		base = append(base, "-f", e.overrideFile(a))
 	}
@@ -282,6 +297,7 @@ func (e *Engine) launch(ctx context.Context, a store.App, kind string, work func
 		lk.Unlock()
 		return 0, err
 	}
+	log.Printf("%s #%d of %s started", kind, id, a.Name)
 	go func() {
 		defer lk.Unlock()
 		bg := context.Background()
@@ -295,6 +311,7 @@ func (e *Engine) launch(ctx context.Context, a store.App, kind string, work func
 			fmt.Fprintf(w, "\n%s OK\n", strings.ToUpper(kind))
 		}
 		e.Store.FinishDeploy(bg, id, status, sha)
+		log.Printf("%s #%d of %s finished: %s (commit %.8s)", kind, id, a.Name, status, sha)
 	}()
 	return id, nil
 }

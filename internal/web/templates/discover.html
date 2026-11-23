@@ -30,4 +30,19 @@
 {{else}}<label class="opt off"><input type="radio" disabled><span>Use the existing folder<br><span class="mute">Not available: {{.ExistingWhy}}.</span></span></label>{{end}}
 <label class="opt"><input type="radio" name="mode" value="clone" required><span>Clone a new copy managed by Berth<br><span class="mute">Berth keeps its own clone and may reset it on each deploy. Manage variables in Berth.</span></span></label>
 </fieldset><button>{{icon "plus"}}Register</button></form>{{end}}
-</div>{{end}}</div>{{end}}
+</div>{{end}}</div>{
+{{if .Others}}<div class="card"><h2>{{icon "box"}}Other apps found</h2>
+<p class="mute">Folders in the scan paths that have a compose file but are not in the expected list. Add one to manage it in Berth.</p>
+{{range .Others}}<details style="padding:8px 0"><summary class="more">{{icon "chevron-right"}}<strong>{{.Folder}}</strong> <span class="mute">{{.Path}}</span></summary>
+<div class="mute" style="margin:6px 0">{{if .Remote}}{{.Remote}}{{else}}no git remote{{end}}{{if .Branch}} · {{icon "git-branch"}} {{.Branch}}{{end}}</div>
+<form method="post" action="{{base}}/discover/add"><input type="hidden" name="path" value="{{.Path}}">
+<label>Name</label><input type="text" name="name" value="{{.SuggestedName}}" required>
+{{if gt (len .Composes) 1}}<label>Compose file</label><select name="compose">{{range .Composes}}<option>{{.}}</option>{{end}}</select>
+{{else}}<input type="hidden" name="compose" value="{{index .Composes 0}}"><p class="mute">Compose file: <code>{{index .Composes 0}}</code></p>{{end}}
+<label>Compose project <span class="mute">(optional: the name of a stack already running, so Berth adopts it and keeps its containers and volumes)</span></label><input type="text" name="project" placeholder="leave empty for a new stack">
+<fieldset><legend>How should Berth run it? Choose one.</legend>
+{{if and .HasGit .Branch .Remote}}<label class="opt"><input type="radio" name="mode" value="existing" required><span>Use the existing folder<br><span class="mute">Fast-forward updates only; never resets, cleans or switches branches there.</span></span></label>
+{{else}}<label class="opt off"><input type="radio" disabled><span>Use the existing folder<br><span class="mute">Not available: it needs a git checkout on a branch, with a remote.</span></span></label>{{end}}
+{{if .Remote}}<label class="opt"><input type="radio" name="mode" value="clone" required><span>Clone a new copy managed by Berth<br><span class="mute">Berth keeps its own clone and may reset it on each deploy.</span></span></label>
+{{else}}<label class="opt off"><input type="radio" disabled><span>Clone a new copy<br><span class="mute">Not available: the folder has no git remote.</span></span></label>{{end}}
+</fieldset><button>{{icon "plus"}}Add</button></form></details>{{end}}</div>{{end}}{{end}}

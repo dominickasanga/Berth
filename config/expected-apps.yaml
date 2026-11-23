@@ -15,6 +15,11 @@ apps:
     compose_file: docker-compose.yml
     folder_names: [kite360, kite360-web]
     public_url: https://kite360.live
+    # The container on the server is tams-nuxt_proworkwave_erp_1, so its compose project is
+    # "tams-nuxt". Using that name lets Berth replace it in place instead of starting a
+    # second copy on port 3024. Verify on the server before the first deploy:
+    #   docker inspect tams-nuxt_proworkwave_erp_1 --format '{{index .Config.Labels "com.docker.compose.project"}}'
+    compose_project: tams-nuxt
     monitor: true
 
   - name: kite360-api
@@ -46,3 +51,55 @@ apps:
     compose_file: docker-compose.yml
     folder_names: [nyasahub-web-app, nyasahub-web]
     monitor: true
+
+  # ---- support services and other apps that already run in Docker on the server ----
+  # compose_project is the project the running containers belong to. Berth then adopts them in
+  # place (same containers, same named volumes) instead of creating "berth-<app>" copies, which
+  # would get new, empty volumes. These names are inferred from container and image names;
+  # verify each on the server before the first deploy (replace <container>):
+  #   docker inspect <container> --format '{{index .Config.Labels "com.docker.compose.project"}}'
+
+  - name: gopherpost
+    title: GopherPost (email service)
+    repo: https://github.com/dominickasanga/GopherPost
+    branch: main
+    compose_file: docker-compose.yml     # network_mode: host, listens on the host (8787); the Kite360 API calls it
+    folder_names: [gopherpost]
+    compose_project: gopherpost          # container: gopherpost
+    monitor: true
+
+  - name: gotenberg
+    title: Gotenberg (PDF conversion)
+    repo: https://github.com/dominickasanga/Gotenberg
+    branch: main
+    compose_file: docker-compose.yml     # joins the external network "kite360", created by the Kite360 API stack: deploy that first
+    folder_names: [gotenberg]
+    compose_project: gotenberg           # container: gotenberg
+    monitor: true
+
+  - name: sb-web
+    title: SB web (Vite front end)
+    repo: https://github.com/dominickasanga/SB-Web-APP
+    branch: main                         # the folder on the Mac is on "oauth2"; confirm the production branch
+    compose_file: docker-compose.yml     # container: production_vite_app (5173). The spoof server (8686) has its own compose
+    folder_names: [sb-web-app, sb-web]
+    compose_project: sb-web-app          # image: sb-web-app_vite-app
+    monitor: true
+
+  - name: tusk
+    title: TusK (receiver + its own Postgres)
+    repo: https://github.com/dominickasanga/TusK
+    branch: main                         # the folder on the Mac is on "feature/backup-agent"; confirm the production branch
+    compose_file: docker-compose.yml
+    folder_names: [tusk]
+    compose_project: tusk                # containers: tusk_receiver_1, tusk_db_1; its Postgres data is in a named volume
+    monitor: true
+
+  - name: pgadmin4
+    title: pgAdmin 4
+    repo: https://github.com/dominickasanga/pgadmin4
+    branch: main
+    compose_file: docker-compose.yml     # needs the external network "traefik-net" and a .env
+    folder_names: [pgadmin4, pgadmin]
+    compose_project: pgadmin4            # container: pgadmin; its data is in the named volume pgadmin_data
+    monitor: false

@@ -1,0 +1,30 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="{{base}}/">Apps</a>{{icon "chevron-right"}}<a href="{{base}}/services">Services</a>{{icon "chevron-right"}}<span aria-current="page">{{if .Form.Edit}}Edit {{.Form.Name}}{{else}}Add service{{end}}</span></nav>{{end}}
+{{define "content"}}<h1>{{if .Form.Edit}}Edit {{.Form.Name}}{{else}}Add a service{{end}}</h1>
+<div class="card">
+{{if .Error}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.Error}}</span></p>{{end}}
+<form method="post" action="{{base}}/services{{if .Form.Edit}}/{{.Form.ID}}{{end}}" id="svcform">
+<input type="hidden" name="id" value="{{.Form.ID}}">
+{{if .Form.Edit}}<input type="hidden" name="kind" value="{{.Form.Kind}}"><p class="mute">{{.Form.Kind}} · name and kind cannot be changed.</p>
+{{else}}<label>Name (lowercase, digits, dashes)</label><input type="text" name="name" value="{{.Form.Name}}" placeholder="postgres-main" required>
+<label>Kind</label><select name="kind" id="kindsel">{{range .Kinds}}<option value="{{.Def.Kind}}" data-port="{{.Def.DefaultPort}}" {{if eq .Def.Kind $.Form.Kind}}selected{{end}}>{{.Def.Label}}</option>{{end}}</select>{{end}}
+
+<div class="row" style="align-items:flex-start;margin-top:4px"><div style="flex:3;min-width:180px"><label>Host</label><input type="text" name="host" value="{{.Form.Host}}" placeholder="127.0.0.1"></div>
+<div style="flex:1;min-width:90px"><label>Port</label><input type="text" name="port" id="portin" value="{{.Form.Port}}" inputmode="numeric"></div></div>
+
+{{range .Kinds}}<div class="kindbox" data-kind="{{.Def.Kind}}" {{if ne .Def.Kind $.Form.Kind}}hidden{{end}}>
+{{if .Def.HasCredentials}}<div class="row" style="align-items:flex-start"><div style="flex:1;min-width:160px"><label>Username <span class="mute">(optional)</span></label><input type="text" name="username" {{if eq .Def.Kind $.Form.Kind}}value="{{$.Form.Username}}"{{end}} autocomplete="off"></div>
+<div style="flex:1;min-width:160px"><label>Password <span class="mute">(optional)</span></label><input type="password" name="password" autocomplete="new-password" {{if $.Form.HasPassword}}placeholder="saved, leave empty to keep"{{end}}></div></div>
+{{if $.Form.HasPassword}}<label style="font-weight:400"><input type="checkbox" name="clear_password"> Remove the saved password</label>{{end}}{{end}}
+<p class="mute">{{.Def.CredentialsHelp}}</p>
+{{range .Def.Params}}<label>{{.Label}}{{if .Required}} *{{end}}</label><input type="text" name="p_{{.Key}}" value="{{index $.Form.Params .Key}}" placeholder="{{.Default}}">{{if .Help}}<div class="mute">{{.Help}}</div>{{end}}{{end}}
+{{if .Def.Thresholds}}<h2 style="margin-top:16px">Alerts</h2>{{range .Def.Thresholds}}<label>{{.Label}}{{if .Unit}} ({{.Unit}}){{end}}</label><input type="text" name="t_{{.Key}}" value="{{index $.Form.Params (printf "t_%s" .Key)}}" placeholder="{{.Default}}" inputmode="decimal">{{end}}{{end}}
+</div>{{end}}
+
+<label>Failed checks in a row before it counts as down</label><input type="text" name="fail_checks" value="{{index .Form.Params "fail_checks"}}" placeholder="2" inputmode="numeric" style="max-width:120px">
+<label style="font-weight:400;margin-top:12px"><input type="checkbox" name="enabled" {{if .Form.Enabled}}checked{{end}}> Check this service</label>
+
+<div class="row" style="margin-top:16px"><button>{{if .Form.Edit}}Save{{else}}{{icon "plus"}}Add service{{end}}</button>
+<button type="button" class="plain act-start" hx-post="{{base}}/services/test" hx-include="#svcform" hx-target="#testresult" hx-indicator="#testresult">{{icon "activity"}}Test connection</button>
+<a class="btn plain" style="background:transparent;color:var(--fg);border-color:var(--line)" href="{{base}}/services{{if .Form.Edit}}/{{.Form.ID}}{{end}}">Cancel</a></div>
+<div id="testresult" style="margin-top:12px" aria-live="polite"></div>
+</form></div>{{end}}

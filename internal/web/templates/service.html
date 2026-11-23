@@ -1,0 +1,24 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="{{base}}/">Apps</a>{{icon "chevron-right"}}<a href="{{base}}/services">Services</a>{{icon "chevron-right"}}<span aria-current="page">{{.S.Name}}</span></nav>{{end}}
+{{define "content"}}
+<div class="row"><h1 style="flex:1">{{.S.Name}} <span class="mute" style="font-size:14px;font-weight:400">{{.Kind.Label}}{{if .S.Host}} · {{.S.Host}}{{if .S.Port}}:{{.S.Port}}{{end}}{{end}}</span></h1>
+<form method="post" action="{{base}}/services/{{.S.ID}}/check"><button class="plain act-start">{{icon "rotate-cw"}}Check now</button></form>
+<a class="btn plain" style="background:transparent;color:var(--fg);border-color:var(--line)" href="{{base}}/services/{{.S.ID}}/edit">Edit</a>
+<form method="post" action="{{base}}/services/{{.S.ID}}/delete" data-confirm="Remove {{.S.Name}} and all its history? The service itself is not touched."><button class="plain act-remove">{{icon "trash-2"}}Remove</button></form></div>
+{{if .Flash}}<p class="alert ok">{{icon "circle-check"}}<span>{{.Flash}}</span></p>{{end}}
+
+<div class="card"><h2>{{icon "circle-dot"}}Status</h2>
+{{if not .S.Enabled}}<p><span class="badge">paused</span> <span class="mute">Edit the service to start checking it again.</span></p>
+{{else if not .State}}<p class="mute">Waiting for the first check…</p>
+{{else}}<p class="row" style="margin:0 0 8px">{{if .State.Up}}<span class="badge ok">Up</span>{{else}}<span class="badge failed">Down</span>{{end}}
+<span class="mute">{{if .State.Up}}since{{else}}down since{{end}} {{.State.Since.Format "2006-01-02 15:04"}} · last checked {{.State.CheckedAt.Format "15:04:05"}}</span></p>
+{{if not .State.Up}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.State.Error}}</span></p><p class="mute">The values below are from the last successful check.</p>{{end}}
+{{if .Cards}}<dl class="stats">{{range .Cards}}<div><dt>{{.Title}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
+{{if .Info}}<table style="margin-top:8px">{{range .Info}}<tr><td class="mute" style="width:30%;text-transform:capitalize">{{.Title}}</td><td>{{.Value}}</td></tr>{{end}}</table>{{end}}{{end}}</div>
+
+{{if .Open}}<div class="card"><h2>{{icon "bell"}}Active alerts</h2>{{range .Open}}<p style="margin:6px 0"><span class="badge {{if eq .Severity "critical"}}failed{{else}}running{{end}}">{{.Severity}}</span> {{.Message}} <span class="mute">since {{.OpenedAt.Format "2006-01-02 15:04"}}{{if .NotifiedAt}} · emailed{{else if $.MailOn}} · email pending{{end}}</span></p>{{end}}</div>{{end}}
+
+<div class="row" style="margin:4px 0 12px"><h2 style="margin:0;flex:1">{{icon "activity"}}History</h2>
+<nav class="ranges" aria-label="Time range">{{range .Ranges}}<a href="{{base}}/services/{{$.S.ID}}?range={{.Key}}" {{if eq .Key $.Range}}aria-current="true"{{end}}>{{.Label}}</a>{{end}}</nav></div>
+<div class="grid charts">{{range .Charts}}<div class="card chart"><div class="row" style="margin-bottom:4px"><strong>{{.Title}}</strong><span style="flex:1"></span><span class="mute">{{.Last}}</span></div>{{.SVG}}</div>{{else}}<div class="card mute">History appears after the first checks.</div>{{end}}</div>
+
+{{range .Tables}}<div class="card"><h2>{{.Title}}</h2><table><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr>{{range .Rows}}<tr>{{range .}}<td>{{.}}</td>{{end}}</tr>{{else}}<tr><td class="mute">None.</td></tr>{{end}}</table></div>{{end}}{{end}}

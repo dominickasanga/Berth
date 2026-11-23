@@ -26,6 +26,8 @@ import (
 	"github.com/dominickasanga/berth/internal/crypt"
 	"github.com/dominickasanga/berth/internal/deploy"
 	"github.com/dominickasanga/berth/internal/discover"
+	"github.com/dominickasanga/berth/internal/logs"
+	"github.com/dominickasanga/berth/internal/monitor"
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
@@ -48,6 +50,15 @@ type Server struct {
 	// BasePath is the URL prefix Berth is served under, e.g. "/_berth" ("" = the site root).
 	// The proxy in front must pass the prefix through unchanged.
 	BasePath string
+	// Logs holds Berth's own recent log lines for the Logs page (nil disables the page).
+	Logs *logs.Hub
+	// Sampler checks the supporting services; MailOn says whether alert emails are configured.
+	Sampler *monitor.Sampler
+	MailOn  bool
+	// RequestLog is "quiet" (default), "all" or "off": see logRequests.
+	RequestLog string
+	// ExpectedServices are the services suggested on the Services page.
+	ExpectedServices []config.ExpectedService
 
 	tpl       map[string]*template.Template
 	dummyHash []byte
@@ -75,7 +86,15 @@ func (s *Server) Handler() (http.Handler, error) {
 			return template.HTML(`<svg class="i" aria-hidden="true" focusable="false"><use href="` + s.BasePath + `/static/icons.svg?v=` + ver + `#` + name + `"/></svg>`)
 		},
 	}
-	for _, page := range []string{"login", "apps", "app_new", "app", "discover"} {
+	entries, err := tplFS.ReadDir("templates") // every template file except the layout and fragments is a page
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		page := strings.TrimSuffix(e.Name(), ".html")
+		if page == "layout" || page == "fragments" {
+			continue
+		}
 		t, err := template.New("").Funcs(funcs).ParseFS(tplFS, "templates/layout.html", "templates/"+page+".html")
 		if err != nil {
 			return nil, err
@@ -94,11 +113,24 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /{$}", s.auth(s.appsPage))
+	mux.HandleFunc("GET /services", s.auth(s.servicesPage))
+	mux.HandleFunc("GET /services/new", s.auth(s.serviceNewPage))
+	mux.HandleFunc("POST /services", s.auth(s.serviceCreate))
+	mux.HandleFunc("POST /services/test", s.auth(s.serviceTest))
+	mux.HandleFunc("GET /services/{id}", s.auth(s.serviceDetail))
+	mux.HandleFunc("GET /services/{id}/edit", s.auth(s.serviceEditPage))
+	mux.HandleFunc("POST /services/{id}", s.auth(s.serviceUpdate))
+	mux.HandleFunc("POST /services/{id}/delete", s.auth(s.serviceDelete))
+	mux.HandleFunc("POST /services/{id}/check", s.auth(s.serviceCheck))
+	mux.HandleFunc("GET /audit", s.auth(s.auditPage))
+	mux.HandleFunc("GET /logs", s.auth(s.logsPage))
+	mux.HandleFunc("GET /logs/stream", s.auth(s.logsStream))
 	mux.HandleFunc("GET /discover", s.auth(s.discoverPage))
 	mux.HandleFunc("POST /discover/paths", s.auth(s.discoverAddPath))
 	mux.HandleFunc("POST /discover/paths/delete", s.auth(s.discoverDeletePath))
 	mux.HandleFunc("POST /discover/choose", s.auth(s.discoverChoose))
 	mux.HandleFunc("POST /discover/register", s.auth(s.discoverRegister))
+	mux.HandleFunc("POST /discover/add", s.auth(s.discoverAdd))
 	mux.HandleFunc("GET /apps/new", s.auth(s.appNewPage))
 	mux.HandleFunc("POST /apps", s.auth(s.appCreate))
 	mux.HandleFunc("GET /apps/{name}", s.auth(s.appPage))
@@ -112,15 +144,19 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /apps/{name}/env/delete", s.auth(s.envDelete))
 	mux.HandleFunc("GET /deploys/{id}/log", s.auth(s.deployLog))
 	h := s.sameOrigin(secureHeaders(mux))
+	mode := s.RequestLog
+	if mode == "" {
+		mode = "quiet"
+	}
 	if s.BasePath == "" {
-		return h, nil
+		return logRequests(mode, "", h), nil
 	}
 	root := http.NewServeMux()
 	root.Handle(s.BasePath+"/", http.StripPrefix(s.BasePath, h))
 	toBase := func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, s.BasePath+"/", http.StatusFound) }
 	root.HandleFunc("GET "+s.BasePath, toBase)
 	root.HandleFunc("GET /{$}", toBase) // the bare site root points people to Berth
-	return root, nil
+	return logRequests(mode, s.BasePath, root), nil
 }
 
 // staticVersion hashes the embedded static files; pages link them as ?v=<hash>.
@@ -208,6 +244,7 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, *store.Admin
 		c, err := r.Cookie(cookieName)
 		if err == nil {
 			if a, err := s.Store.SessionAdmin(r.Context(), c.Value); err == nil && a != nil {
+				setLoggedUser(r.Context(), a.Username)
 				next(w, r, a)
 				return
 			}
@@ -227,6 +264,11 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		name = ""
 	}
 	t := s.tpl[page]
+	if t == nil {
+		log.Printf("render: no template for page %q", page)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
 	var err error
 	if name == "" {
 		err = t.ExecuteTemplate(w, data.(frag).Name, data.(frag).Data)
@@ -269,11 +311,13 @@ func (s *Server) noteFail(user string) {
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	user := strings.TrimSpace(r.FormValue("username"))
 	fail := func() {
+		log.Printf("login failed: user=%q ip=%s", user, r.RemoteAddr)
 		s.noteFail(user)
 		w.WriteHeader(http.StatusUnauthorized)
 		s.render(w, "login", map[string]string{"Error": "Wrong username, password or code."})
 	}
 	if s.tooManyFails(user) {
+		log.Printf("login refused (too many attempts): user=%q ip=%s", user, r.RemoteAddr)
 		w.WriteHeader(http.StatusTooManyRequests)
 		s.render(w, "login", map[string]string{"Error": "Too many attempts. Try again in 10 minutes."})
 		return
@@ -309,6 +353,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: s.cookiePath(), HttpOnly: true,
 		Secure: s.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: 12 * 3600})
+	setLoggedUser(r.Context(), a.Username)
 	s.Store.Audit(r.Context(), a.Username, "login", "")
 	s.redirect(w, r, "/")
 }
@@ -629,7 +674,8 @@ func (s *Server) discoverPage(w http.ResponseWriter, r *http.Request, a *store.A
 		rows = append(rows, row)
 	}
 	s.render(w, "discover", map[string]any{"User": a.Username, "Paths": paths, "Notes": notes, "Rows": rows,
-		"Flash": r.URL.Query().Get("msg"), "Error": r.URL.Query().Get("err")})
+		"Others": discover.ScanOthers(paths, s.Expected, registeredPaths(apps)),
+		"Flash":  r.URL.Query().Get("msg"), "Error": r.URL.Query().Get("err")})
 }
 
 func (s *Server) discoverRedirect(w http.ResponseWriter, r *http.Request, key, msg string) {
@@ -709,7 +755,8 @@ func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *sto
 		return
 	}
 	app := store.App{Name: x.Name, RepoURL: x.Repo, Branch: x.Branch, Subfolder: x.Subfolder,
-		ComposeFile: x.ComposeFile, PredeploySvc: x.PredeployService, Monitor: x.Monitor, SourceMode: mode}
+		ComposeFile: x.ComposeFile, PredeploySvc: x.PredeployService, Monitor: x.Monitor, SourceMode: mode,
+		ComposeProject: x.ComposeProject}
 	c, need := discover.Resolve(found[x.Name], choices[x.Name])
 	if mode == "existing" {
 		if need {
@@ -832,4 +879,139 @@ func (s *Server) appSource(w http.ResponseWriter, r *http.Request, a *store.Admi
 		msg = "Now using a Berth-managed clone. Deploy to create it; until then Start, Stop and Logs may not work."
 	}
 	back("msg", msg)
+}
+
+// registeredPaths are folders already used by a registered app (they are not "other" apps).
+func registeredPaths(apps []store.App) map[string]bool {
+	m := map[string]bool{}
+	for _, a := range apps {
+		if a.SourcePath != "" {
+			m[a.SourcePath] = true
+		}
+	}
+	return m
+}
+
+var appNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)
+
+// discoverAdd registers a folder from "Other apps found". The folder and compose file must be
+// ones the scan finds right now, so the form cannot point Berth at an arbitrary path.
+func (s *Server) discoverAdd(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	paths, err := s.Store.ListScanPaths(r.Context())
+	apps, err2 := s.Store.ListApps(r.Context())
+	if err != nil || err2 != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	var folder *discover.Other
+	others := discover.ScanOthers(paths, s.Expected, registeredPaths(apps))
+	for i := range others {
+		if others[i].Path == r.FormValue("path") {
+			folder = &others[i]
+		}
+	}
+	if folder == nil {
+		s.discoverRedirect(w, r, "err", "That folder was not found in this scan, or it is already added; nothing was changed.")
+		return
+	}
+	compose := r.FormValue("compose")
+	found := false
+	for _, c := range folder.Composes {
+		found = found || c == compose
+	}
+	if !found {
+		s.discoverRedirect(w, r, "err", "Choose one of the compose files found in that folder.")
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if !appNameRe.MatchString(name) {
+		s.discoverRedirect(w, r, "err", "The name must be lowercase letters, digits and dashes.")
+		return
+	}
+	mode := r.FormValue("mode")
+	if mode != "existing" && mode != "clone" {
+		s.discoverRedirect(w, r, "err", "Choose how to run "+name+": use the existing folder, or clone a new copy.")
+		return
+	}
+	if folder.Remote == "" {
+		s.discoverRedirect(w, r, "err", "That folder has no git remote, so Berth cannot clone or update it. Add it by hand with Register app.")
+		return
+	}
+	if mode == "existing" && (!folder.HasGit || folder.Branch == "") {
+		s.discoverRedirect(w, r, "err", "Cannot use the existing folder: it is not a git checkout on a branch. Clone a new copy instead.")
+		return
+	}
+	dir := filepath.Dir(compose)
+	if dir == "." {
+		dir = ""
+	}
+	app := store.App{Name: name, RepoURL: folder.Remote, Branch: folder.Branch, Subfolder: dir, ComposeFile: filepath.Base(compose),
+		SourcePath: folder.Path, SourceMode: mode, ComposeProject: strings.TrimSpace(r.FormValue("project"))}
+	if app.Branch == "" {
+		app.Branch = "main"
+	}
+	err = deploy.ValidateApp(app)
+	if err == nil {
+		err = s.Store.CreateApp(r.Context(), app)
+	}
+	if err != nil {
+		s.discoverRedirect(w, r, "err", "Could not add "+name+": the name is already used, or a setting is invalid (compose project: lowercase letters, digits, - and _).")
+		return
+	}
+	s.Store.Audit(r.Context(), a.Username, "app.create", app.Name+" (added from discovery)")
+	s.redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape("added from discovery"))
+}
+
+// ---- Berth's own logs and audit trail ----
+
+func (s *Server) auditPage(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	const pageSize = 100
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	rows, err := s.Store.ListAudit(r.Context(), pageSize+1, before)
+	if err != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	var next int64
+	if len(rows) > pageSize {
+		rows = rows[:pageSize]
+		next = rows[len(rows)-1].ID
+	}
+	s.render(w, "audit", map[string]any{"User": a.Username, "Rows": rows, "Next": next})
+}
+
+func (s *Server) logsPage(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	s.render(w, "logs", map[string]any{"User": a.Username, "Enabled": s.Logs != nil})
+}
+
+// logsStream sends Berth's recent log lines, then new ones as they are written (server-sent events).
+func (s *Server) logsStream(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	fl, ok := w.(http.Flusher)
+	if s.Logs == nil || !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	recent, live, cancel := s.Logs.Subscribe(300)
+	defer cancel()
+	for _, l := range recent {
+		fmt.Fprintf(w, "data: %s\n\n", l)
+	}
+	fl.Flush()
+	keepAlive := time.NewTicker(25 * time.Second) // keeps proxies from closing an idle stream
+	defer keepAlive.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case l := <-live:
+			fmt.Fprintf(w, "data: %s\n\n", l)
+			fl.Flush()
+		case <-keepAlive.C:
+			fmt.Fprint(w, ": keep-alive\n\n")
+			fl.Flush()
+		}
+	}
 }

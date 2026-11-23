@@ -1,0 +1,51 @@
+# Services Berth suggests monitoring. They appear on the Services page with a one-click "Add"
+# that opens the form pre-filled; nothing is monitored until you add it. All hosts are
+# 127.0.0.1 because Berth runs on the same host as these services. Ports come from the
+# production server (docker ps and ss -tlnp).
+#
+# For credentials, use read-only monitoring users (see the README, "Monitoring services").
+services:
+  - {name: postgres-main, kind: postgres, host: 127.0.0.1, port: 5432, note: "Host PostgreSQL used by the APIs. Create a read-only role with pg_monitor."}
+  - {name: redis-main, kind: redis, host: 127.0.0.1, port: 6379, note: "Host Redis (listens on loopback only)."}
+  - {name: mongo-main, kind: mongo, host: 127.0.0.1, port: 27017, note: "Host MongoDB (listens on loopback only)."}
+  - name: rabbitmq-main
+    kind: rabbitmq
+    host: 127.0.0.1
+    port: 5672
+    params: {mgmt_port: "15672"}
+    note: "Host RabbitMQ. Port 15672 is not open on the server yet: enable the management plugin for queue and memory metrics, otherwise only AMQP reachability is checked."
+  - {name: mysql-main, kind: mysql, host: 127.0.0.1, port: 3306, note: "The MySQL container (blockvolume_mysql8_1). Reachability and version only."}
+  - {name: gopherpost, kind: tcp, host: 127.0.0.1, port: 8787, note: "GopherPost email service (host network). The Kite360 API sends email through it."}
+  - name: gotenberg
+    kind: http
+    host: 127.0.0.1
+    port: 3025
+    params: {url: "http://127.0.0.1:3025/health"}
+    note: "Gotenberg PDF conversion."
+  - name: kite360-api
+    kind: http
+    host: 127.0.0.1
+    port: 8001
+    params: {url: "http://127.0.0.1:8001/healthz"}
+    note: "Kite360 API health endpoint."
+  - name: nyasahub-api
+    kind: http
+    host: 127.0.0.1
+    port: 8090
+    params: {url: "http://127.0.0.1:8090/health"}
+    note: "NyasaHub API health endpoint."
+  - name: kite360-web
+    kind: http
+    host: 127.0.0.1
+    port: 3024
+    params: {url: "http://127.0.0.1:3024/", expect: "200"}
+    note: "Kite360 web."
+  - name: nyasahub-web
+    kind: http
+    host: 127.0.0.1
+    port: 3000
+    params: {url: "http://127.0.0.1:3000/robots.txt", expect: "200"}
+    note: "NyasaHub web."
+  - {name: traefik, kind: tcp, host: 127.0.0.1, port: 443, note: "Traefik, the front door for the proxied apps. If it is down, they are all unreachable."}
+  - {name: pgadmin, kind: tcp, host: 127.0.0.1, port: 81, note: "pgAdmin."}
+  - {name: tusk-receiver, kind: tcp, host: 127.0.0.1, port: 5183, note: "TusK receiver."}

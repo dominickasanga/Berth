@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -62,11 +63,7 @@ func Scan(paths []string, expected []config.ExpectedApp) (map[string][]Candidate
 			}
 			remote, branch, hasGit := readGit(dir)
 			for _, x := range expected {
-				nameMatch := strings.EqualFold(e.Name(), x.Name)
-				for _, n := range x.FolderNames {
-					nameMatch = nameMatch || strings.EqualFold(e.Name(), n)
-				}
-				remoteMatch := remote != "" && Normalize(remote) == Normalize(x.Repo)
+				nameMatch, remoteMatch := matches(x, e.Name(), remote)
 				if nameMatch || remoteMatch {
 					found[x.Name] = append(found[x.Name], Candidate{
 						Path: dir, Folder: e.Name(), Remote: StripCredentials(remote), Branch: branch,
@@ -80,6 +77,106 @@ func Scan(paths []string, expected []config.ExpectedApp) (map[string][]Candidate
 		sort.Slice(found[k], func(i, j int) bool { return found[k][i].Path < found[k][j].Path })
 	}
 	return found, notes
+}
+
+// matches applies the expected-app rule: folder name and/or git remote.
+func matches(x config.ExpectedApp, folder, remote string) (nameMatch, remoteMatch bool) {
+	nameMatch = strings.EqualFold(folder, x.Name)
+	for _, n := range x.FolderNames {
+		nameMatch = nameMatch || strings.EqualFold(folder, n)
+	}
+	remoteMatch = remote != "" && Normalize(remote) == Normalize(x.Repo)
+	return
+}
+
+// Other is a scanned folder with a compose file that is not one of the expected apps.
+type Other struct {
+	Path, Folder, Remote, Branch string
+	HasGit                       bool
+	Composes                     []string // compose files relative to Path, e.g. "deployments/docker/docker-compose.prod.yml"
+	SuggestedName                string
+}
+
+var (
+	composeRe = regexp.MustCompile(`^(docker-)?compose(\..+)?\.ya?ml$`)
+	skipDirs  = map[string]bool{"node_modules": true, ".git": true, "vendor": true, ".nuxt": true, ".output": true,
+		"dist": true, "build": true, ".next": true, "target": true, "__pycache__": true, "venv": true, ".venv": true,
+		".cache": true, ".devcontainer": true}
+	slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+)
+
+// Slug turns a folder name into a valid app name (lowercase letters, digits, dashes).
+func Slug(folder string) string {
+	s := strings.Trim(slugRe.ReplaceAllString(strings.ToLower(folder), "-"), "-")
+	if len(s) > 40 {
+		s = strings.Trim(s[:40], "-")
+	}
+	return s
+}
+
+// composeFiles finds compose files at most two folders below the app folder
+// (go-api/docker-compose.yml, deployments/docker/docker-compose.yml), shallowest first.
+func composeFiles(dir string) []string {
+	var found []string
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		depth := strings.Count(rel, string(filepath.Separator))
+		if d.IsDir() {
+			if rel != "." && (skipDirs[d.Name()] || depth >= 2) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if composeRe.MatchString(d.Name()) {
+			found = append(found, rel)
+		}
+		return nil
+	})
+	sort.SliceStable(found, func(i, j int) bool {
+		di, dj := strings.Count(found[i], "/"), strings.Count(found[j], "/")
+		if di != dj {
+			return di < dj
+		}
+		return found[i] < found[j]
+	})
+	return found
+}
+
+// ScanOthers lists folders (one level deep in each path) that have a compose file but match no
+// expected app. Folders in skip (paths already registered as apps) are left out.
+func ScanOthers(paths []string, expected []config.ExpectedApp, skip map[string]bool) []Other {
+	var out []Other
+	for _, p := range paths {
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			dir := filepath.Join(p, e.Name())
+			if fi, err := os.Stat(dir); err != nil || !fi.IsDir() || skip[dir] {
+				continue
+			}
+			remote, branch, hasGit := readGit(dir)
+			expectedApp := false
+			for _, x := range expected {
+				if n, r := matches(x, e.Name(), remote); n || r {
+					expectedApp = true
+				}
+			}
+			if expectedApp {
+				continue
+			}
+			if composes := composeFiles(dir); len(composes) > 0 {
+				out = append(out, Other{Path: dir, Folder: e.Name(), Remote: StripCredentials(remote), Branch: branch,
+					HasGit: hasGit, Composes: composes, SuggestedName: Slug(e.Name())})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Folder) < strings.ToLower(out[j].Folder) })
+	return out
 }
 
 // Inspect describes one folder against an expected repository URL (for apps not in expected-apps.yaml).

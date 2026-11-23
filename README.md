@@ -4,8 +4,9 @@
 
 > **Status:** milestones 1 and 2 built (login with 2FA, app registry, env/secrets,
 > git deploy via compose, pre-deploy step, start/stop/restart, status, live
-> container logs, rollback, discovery of expected apps on disk, choice of existing folder or own clone). Not built yet: metrics and alerts, the managed
-> services (Postgres/Mongo/Redis/Docker), Kite360-specific actions. Not yet run
+> container logs, rollback, discovery of expected apps on disk, choice of existing folder or own clone, monitoring of supporting
+> services with graphs and email alerts). Not built yet: metrics for the apps' own containers and the Docker engine, the managed-service actions
+> (create database/user, backups, restore, flush, prune), Kite360-specific actions. Not yet run
 > against the real Kite360 repos or a real server. This file is the source
 > of truth for the next developer or AI agent picking this up. Read it fully before
 > writing code.
@@ -193,7 +194,15 @@ Learned from reading both Kite360 repos. Breaking any of these causes real damag
   survive redeploys. The old host process on port 8090 must be stopped first, and
   migrations (`make migrate-apply`, Atlas) are still run by hand.
 - **NyasaHub web** has `docker-compose.yml` (publishes 3000; the live `nyasahub-web`
-  container must be stopped first).
+  container, started with plain `docker run`, must be stopped and removed first).
+- **Also in the expected list (already in Docker in production):** GopherPost
+  (`network_mode: host`, the email service on 8787), Gotenberg (joins the external network
+  `kite360`, which the Kite360 API stack creates, so deploy the API first), SB web
+  (`production_vite_app` on 5173), TusK (receiver plus its own Postgres 16 in a named
+  volume) and pgAdmin 4 (named volume `pgadmin_data`, external network `traefik-net`).
+  Each adopts its running compose project (see section 9).
+- **Not managed as apps:** Traefik (every route goes through it, so stopping it is an
+  outage), MySQL (`blockvolume_mysql8_1`) and `simple-json-server`.
 - Berth refuses to start on Compose v1 and says how to install v2.
 
 ## 5. Known issues in the wider estate (for later phases)
@@ -241,7 +250,7 @@ export BERTH_DATABASE_URL='postgres:///berth?host=/tmp'
 export BERTH_SECRET_KEY=$(openssl rand -base64 32)   # keep it: losing it makes stored secrets unreadable
 go build -o berth ./cmd/berth
 ./berth admin-create dominic   # asks for a password (min 8 chars, hidden), prints a 2FA QR code to scan
-./berth serve                                   # http://127.0.0.1:8090/_berth/
+./berth serve                                   # http://127.0.0.1:8095/_berth/
 ```
 
 | Variable | Default | Meaning |
@@ -249,7 +258,15 @@ go build -o berth ./cmd/berth
 | `BERTH_DATABASE_URL` | required | Berth's own Postgres database |
 | `BERTH_SECRET_KEY` | required | base64 of 32 bytes; encrypts secrets and 2FA seeds |
 | `BERTH_DATA_DIR` | `./data` | holds `checkouts/` and `env/` (env files are mode 0600, never inside a checkout) |
-| `BERTH_ADDR` | `127.0.0.1:8090` | listen address; put Traefik/TLS in front, never expose it plain |
+| `BERTH_ADDR` | `127.0.0.1:8095` | listen address (8090 is taken by the NyasaHub API on the server); put Traefik/TLS in front, never expose it plain |
+| `BERTH_METRICS_INTERVAL` | `30` | seconds between checks of each monitored service (minimum 5) |
+| `BERTH_METRICS_RETENTION_DAYS` | `7` | how long samples are kept |
+| `BERTH_SMTP_HOST`, `BERTH_SMTP_PORT` (587), `BERTH_SMTP_USER`, `BERTH_SMTP_PASS`, `BERTH_SMTP_FROM`, `BERTH_ALERT_TO` | unset | alert email. Both host and `BERTH_ALERT_TO` (comma-separated) are needed. STARTTLS is used when offered; port 465 uses TLS. Without them alerts are shown on the Services page only |
+| `BERTH_PUBLIC_URL` | unset | base URL (including the prefix) used for links in alert emails |
+| `BERTH_REQUEST_LOG` | `quiet` | request log: `quiet` (default), `all` or `off`; see section 11 |
+| `BERTH_LOG_FILE` | `<data dir>/logs/berth.log` | Berth's own log file; set to an empty string to turn the file off |
+| `BERTH_LOG_MAX_MB` | `10` | rotate the log file at this size |
+| `BERTH_LOG_KEEP` | `5` | rotated files kept (`berth.log.1` is the newest) |
 | `BERTH_BASE_PATH` | `/_berth` | URL prefix Berth is served under, so the UI is at `https://host/_berth/`. Set it to an empty string (`BERTH_BASE_PATH=`) to serve at the site root. Letters, digits, `-`, `_`, `.` only |
 | `BERTH_COOKIE_SECURE` | `true` | set `false` only for local HTTP testing |
 | `BERTH_KEEP_IMAGES` | `5` | rollback image tags kept per image |
@@ -345,6 +362,23 @@ and `.git/HEAD`; it never runs anything in them.
   folder was recorded). The change takes effect on the next deploy, is refused while
   a deploy is running, and never deletes the old clone or touches the folder. After
   switching to a clone, Start/Stop/Logs may not work until you Deploy once.
+- **Compose project name (adopting an existing stack).** Berth normally runs an app as
+  compose project `berth-<app>`. A stack that already runs under another project name
+  (for example `tusk_db_1` belongs to project `tusk`, `tams-nuxt_proworkwave_erp_1` to
+  `tams-nuxt`) would then get **new, empty named volumes** and clash on fixed container
+  names such as `gotenberg` and `pgadmin`. Setting `compose_project` on the app (in
+  `config/expected-apps.yaml`, or in the "Other apps found" form) makes Berth manage that
+  existing project in place, keeping its containers and volumes. The app page shows the
+  project in use. Tested: an adopted stack kept its volume's data; the default name made
+  a new empty volume. The names in the YAML are inferred from container and image names, so
+  verify each on the server before the first deploy:
+  `docker inspect <container> --format '{{index .Config.Labels "com.docker.compose.project"}}'`
+- **Other apps found.** Below the expected apps, Discover lists scanned folders (one level
+  deep) that have a compose file (at most two folders down, skipping `node_modules` and
+  similar) but are not in the expected list. Each has an Add form pre-filled from the
+  folder: name, compose file, optional compose project, and the same must-choose
+  "existing folder / clone" radios. The folder and compose file must be ones the scan finds
+  right now. Folders already added are left out.
 - **monitor** is recorded on the app and shown on its page. It does nothing until
   the metrics milestone is built.
 
@@ -352,7 +386,7 @@ and `.git/HEAD`; it never runs anything in them.
 
 Berth serves everything under `BERTH_BASE_PATH` (default `/_berth`): pages, API,
 static files, redirects and the session cookie (limited to that path). Open
-`http://127.0.0.1:8090/_berth/`. The bare site root `/` redirects there; other paths
+`http://127.0.0.1:8095/_berth/`. The bare site root `/` redirects there; other paths
 outside the prefix return 404.
 
 Behind a reverse proxy, **pass the prefix through unchanged** (do not strip it), for
@@ -362,7 +396,89 @@ example with Traefik:
 labels:
   - traefik.http.routers.berth.rule=Host(`example.com`) && PathPrefix(`/_berth`)
   - traefik.http.routers.berth.entrypoints=websecure
-  - traefik.http.services.berth.loadbalancer.server.port=8090
+  - traefik.http.services.berth.loadbalancer.server.port=8095
 ```
 
 Live logs use server-sent events, so the proxy must not buffer responses for this path.
+
+## 11. Berth's own logs and audit trail
+
+Three things, all behind the login:
+
+- **Logs page** (`/_berth/logs`): Berth's own log, live, with the same Side panel and Full
+  screen views as the apps' logs. It shows the last 300 lines on open, then new ones as they
+  are written. It is Berth's log (starts, deploys, failed logins, errors), not an app's log.
+- **Audit page** (`/_berth/audit`): who did what and when (logins, app changes, deploys,
+  rollbacks, variable changes, mode switches), newest first, 100 per page. Stored in
+  PostgreSQL. Secret values are never recorded; variable changes show only the name.
+- **Log file** (`BERTH_DATA_DIR/logs/berth.log`, mode 0640): the same lines as on stderr,
+  rotated by size (`BERTH_LOG_MAX_MB`, `BERTH_LOG_KEEP`). Under systemd, stderr also goes to
+  the journal, so `journalctl -u berth` works too.
+
+**Request log.** One line per request, in the terminal, the file and the Logs page:
+`http: GET /_berth/services 200 3ms user=admin ip=127.0.0.1`. Only the path is logged: never
+the query string (flash messages), a form value, a password or a secret. A client-supplied
+`X-Forwarded-For` is shown as `xff=` but never trusted. `quiet` (the default) leaves out
+static files and the pages' own background polling (the status boxes refresh every 10 seconds)
+unless they fail, so real traffic stays readable; `all` logs everything; `off` logs none.
+Long-lived streams (live logs) are logged when they end.
+
+What gets logged: startup (Compose version, log file, address), every deploy and rollback
+start and finish with its result, control failures, failed and refused logins with the
+client address (never the password or code), and one `audit:` line per audited action.
+The Logs page keeps the last 1000 lines in memory; the file and the Audit page keep history.
+
+## 12. Monitoring services
+
+The **Services** page monitors the things your apps depend on. It is built and tested
+against real PostgreSQL, Redis, MongoDB and RabbitMQ.
+
+| Kind | What it checks |
+|---|---|
+| **PostgreSQL** | version, uptime, connections vs `max_connections`, transactions/s, cache hit ratio, deadlocks, waiting locks, long-running queries (text shown to `pg_monitor`/superusers), databases with sizes and connections, optional schema sizes (for the Kite360 tenants) |
+| **Redis** | version, role, memory (and % of `maxmemory`), clients, ops/s, keyspace hit ratio, evictions/s, keys, `PING` latency. Uses a small built-in client, no library |
+| **MongoDB** | version, uptime, connections, ops/s, resident memory, databases and sizes, ping latency |
+| **RabbitMQ** | through the management API: ready/unacked messages, publish and deliver rates, connections, consumers, memory vs limit, disk free, file descriptors, resource alarms, the queues with most messages. If the management port is closed Berth falls back to checking that AMQP answers and says what is missing |
+| **MySQL** | reachability and version, from the server greeting (no login needed) |
+| **HTTP / TCP** | status code and response time / connect time, for GopherPost, Gotenberg, the APIs, Traefik and others |
+
+- **Add** a service with the form (a **Test connection** button tries it without saving). The
+  page also **suggests** the services found on the production server
+  (`config/expected-services.yaml`); adding one opens the form pre-filled.
+- **Checks and history:** every `BERTH_METRICS_INTERVAL` seconds, stored in Berth's PostgreSQL
+  for `BERTH_METRICS_RETENTION_DAYS`. Graphs (1 hour, 24 hours, 7 days) are drawn on the server
+  as SVG, so pages stay small and need no JavaScript library. There is no downsampling: raw
+  samples are kept for the retention period and averaged into buckets when drawn.
+- **Alerts:** a service is *down* after 2 failed checks in a row (adjustable per service). Each
+  kind also has thresholds you can change in its form: PostgreSQL connections (85%), long
+  queries and waiting locks; Redis memory (90% of `maxmemory`); MongoDB connections (80%);
+  RabbitMQ backlog (10000 ready messages) and any memory or disk alarm; HTTP response time.
+  An alert opens once, is emailed once, and a "RESOLVED" email follows when it clears. An email
+  that could not be sent is retried on later checks. Alerts always show on the Services page,
+  even without email set up.
+- Passwords are stored encrypted like app secrets and are never shown again. Berth only reads;
+  use read-only monitoring users.
+
+**Creating monitoring users** (Berth runs on the same host, so connect to `127.0.0.1`):
+
+```sql
+-- PostgreSQL
+CREATE ROLE berth_monitor LOGIN PASSWORD '...';
+GRANT pg_monitor TO berth_monitor;
+-- pg_hba.conf must allow it from 127.0.0.1 (scram-sha-256)
+```
+
+```sh
+# RabbitMQ: the management API is not open on the server yet
+sudo rabbitmq-plugins enable rabbitmq_management
+sudo rabbitmqctl add_user berth '...'
+sudo rabbitmqctl set_user_tags berth monitoring
+sudo rabbitmqctl set_permissions -p / berth '^$' '^$' '.*'   # read-only, if the queue table is empty
+```
+
+MongoDB: a user with the `clusterMonitor` role. Redis: an ACL user limited to `+info +ping`, or no
+password if it listens on loopback only.
+
+**Not built yet:** metrics for the apps' own containers (CPU, memory, restarts) and the Docker
+engine, and the managed-service actions (create a database and user, backups, restore, flush,
+prune). Monitoring is read-only.

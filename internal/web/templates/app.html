@@ -6,6 +6,7 @@
 <div class="card"><h2>{{icon "circle-dot"}}Status</h2>
 <div hx-get="{{base}}/apps/{{.App.Name}}/status" hx-trigger="load, every 10s">…</div>
 <p class="mute">{{.App.RepoURL}} · {{.App.Branch}}{{if .App.Subfolder}} · {{.App.Subfolder}}{{end}} · {{.App.ComposeFile}}{{if .App.PredeploySvc}} · pre-deploy: {{.App.PredeploySvc}}{{end}}</p>
+<p class="mute">Compose project <code>{{if .App.ComposeProject}}{{.App.ComposeProject}}</code> (adopts the existing stack: same containers and volumes){{else}}berth-{{.App.Name}}</code>{{end}}</p>
 {{if .App.Monitor}}<p><span class="badge info">Monitored</span></p>{{end}}
 <p class="row" style="margin:6px 0"><span class="badge {{if eq .App.SourceMode "existing"}}info{{end}}">{{if eq .App.SourceMode "existing"}}Existing folder{{else}}Berth clone{{end}}</span>
 <span class="mute">{{if eq .App.SourceMode "existing"}}Runs from <code>{{.App.SourcePath}}</code>. Deploys only fast-forward it; Berth never resets or deletes anything there. The <code>.env</code> next to its compose file is used as you edit it, and variables saved below override it.{{else}}Berth deploys from its own clone{{if .App.SourcePath}}; a copy at <code>{{.App.SourcePath}}</code> is not touched{{end}}.{{end}}</span></p>

@@ -1,0 +1,9 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="{{base}}/">Apps</a>{{icon "chevron-right"}}<span aria-current="page">Berth logs</span></nav>{{end}}
+{{define "content"}}<h1>Berth logs</h1>
+{{if .Enabled}}<p class="mute">Berth's own log (starts, deploys, logins, errors), live. These are not the apps' logs; open an app for those.</p>
+<div class="card logbox tall" id="logbox"><div class="logbar"><h2>{{icon "scroll-text"}}Live</h2>
+<button class="plain" id="logs-latest" hidden>{{icon "arrow-down"}}Latest</button>
+<button class="plain" id="logs-side" hidden>{{icon "panel-right"}}Side panel</button><button class="plain" id="logs-full" hidden>{{icon "maximize"}}Full screen</button><button class="plain" id="logs-dock" hidden>{{icon "minimize"}}Back to page</button>
+<button class="plain act-start" id="logs-start" data-url="{{base}}/logs/stream" data-autostart>{{icon "play"}}Resume</button><button class="plain act-stop" id="logs-stop" hidden>{{icon "square"}}Pause</button></div>
+<pre id="logs" hidden></pre></div>
+{{else}}<div class="card mute">The log viewer is not enabled.</div>{{end}}{{end}}

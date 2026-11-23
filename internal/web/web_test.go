@@ -1,15 +1,20 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +22,8 @@ import (
 	"github.com/dominickasanga/berth/config"
 	"github.com/dominickasanga/berth/internal/crypt"
 	"github.com/dominickasanga/berth/internal/deploy"
+	"github.com/dominickasanga/berth/internal/logs"
+	"github.com/dominickasanga/berth/internal/monitor"
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp/totp"
@@ -407,5 +414,560 @@ func TestNormalizeBase(t *testing.T) {
 		if _, err := NormalizeBase(bad); err == nil {
 			t.Errorf("NormalizeBase(%q) should be rejected", bad)
 		}
+	}
+}
+
+func TestDiscoverOtherAppsCanBeAdded(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	srv.Expected = []config.ExpectedApp{{Name: "kite360-api", Title: "Kite360 API", Repo: "https://github.com/dominickasanga/Kite360-API", FolderNames: []string{"kite360-api"}}}
+
+	root := t.TempDir()
+	mk := func(rel, content string) {
+		p := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(content), 0o644)
+	}
+	mk("Cool Thing/docker-compose.yml", "services: {}")
+	mk("Cool Thing/.git/config", "[remote \"origin\"]\n\turl = https://tok:secret@github.com/me/cool.git\n")
+	mk("Cool Thing/.git/HEAD", "ref: refs/heads/dev\n")
+	mk("nogit/deployments/docker/compose.prod.yaml", "services: {}") // compose file but no git remote
+	mk("kite360-api/go-api/docker-compose.yml", "services: {}")      // expected app: never listed as "other"
+	cool := filepath.Join(root, "Cool Thing")
+
+	c := client()
+	do := func(method, path string, form url.Values) (int, string, string) {
+		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b), r.Header.Get("Location")
+	}
+	do("POST", "/discover/paths/delete", url.Values{"path": {"/var/www"}})
+	do("POST", "/discover/paths/delete", url.Values{"path": {"/mnt/blockvolume"}})
+	do("POST", "/discover/paths", url.Values{"path": {root}})
+
+	_, page, _ := do("GET", "/discover", nil)
+	if !strings.Contains(page, "Other apps found") || !strings.Contains(page, "Cool Thing") || !strings.Contains(page, "nogit") {
+		t.Fatal("the folders with a compose file should be listed")
+	}
+	if strings.Contains(page, `value="`+filepath.Join(root, "kite360-api")+`"`) {
+		t.Fatal("an expected app must not be listed as an other app")
+	}
+	if strings.Contains(page, "secret") || strings.Contains(page, "tok:") {
+		t.Fatal("credentials from a git remote leaked into the page")
+	}
+
+	add := func(form url.Values) string {
+		_, _, loc := do("POST", "/discover/add", form)
+		return loc
+	}
+	base := func() url.Values {
+		return url.Values{"path": {cool}, "name": {"cool-thing"}, "compose": {"docker-compose.yml"}, "mode": {"existing"}}
+	}
+	// the form cannot point Berth at a path the scan did not find, or at an unlisted compose file
+	f := base()
+	f.Set("path", "/etc")
+	if loc := add(f); !strings.Contains(loc, "err=") {
+		t.Fatalf("a path outside the scan must be refused, got %q", loc)
+	}
+	f = base()
+	f.Set("compose", "../../etc/passwd")
+	if loc := add(f); !strings.Contains(loc, "err=") {
+		t.Fatalf("an unlisted compose file must be refused, got %q", loc)
+	}
+	f = base()
+	f.Set("name", "Bad Name")
+	if loc := add(f); !strings.Contains(loc, "err=") {
+		t.Fatalf("a bad name must be refused, got %q", loc)
+	}
+	f = base()
+	f.Del("mode")
+	if loc := add(f); !strings.Contains(loc, "Choose+how") {
+		t.Fatalf("no mode must be refused, got %q", loc)
+	}
+	// a folder with no git remote cannot be added
+	if loc := add(url.Values{"path": {filepath.Join(root, "nogit")}, "name": {"nogit"}, "compose": {"deployments/docker/compose.prod.yaml"}, "mode": {"existing"}}); !strings.Contains(loc, "no+git+remote") {
+		t.Fatalf("no remote must be refused, got %q", loc)
+	}
+	// a bad project name is refused
+	f = base()
+	f.Set("project", "Bad Project")
+	if loc := add(f); !strings.Contains(loc, "err=") {
+		t.Fatalf("a bad project name must be refused, got %q", loc)
+	}
+
+	// add it, adopting an existing stack
+	f = base()
+	f.Set("project", "cool")
+	if loc := add(f); loc != "/apps/cool-thing?msg=added+from+discovery" {
+		t.Fatalf("add failed: %q", loc)
+	}
+	app, _ := srv.Store.AppByName(context.Background(), "cool-thing")
+	if app == nil || app.SourceMode != "existing" || app.SourcePath != cool || app.Branch != "dev" ||
+		app.ComposeFile != "docker-compose.yml" || app.Subfolder != "" || app.ComposeProject != "cool" || app.Monitor {
+		t.Fatalf("app not added as expected: %+v", app)
+	}
+	if strings.Contains(app.RepoURL, "secret") || strings.Contains(app.RepoURL, "tok") {
+		t.Fatalf("credentials were stored: %s", app.RepoURL)
+	}
+	_, appPage, _ := do("GET", "/apps/cool-thing", nil)
+	if !strings.Contains(appPage, "adopts the existing stack") {
+		t.Fatal("the app page should show the adopted compose project")
+	}
+	// it is no longer listed as an other app
+	_, page, _ = do("GET", "/discover", nil)
+	if strings.Contains(page, `value="`+cool+`"`) {
+		t.Fatal("an added folder must leave the other-apps list")
+	}
+}
+
+func TestLogsPageAuditPageAndNoSecretsInLogs(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	hub := logs.NewHub(200)
+	srv.Logs = hub
+	old := log.Writer()
+	log.SetOutput(hub) // what main does, so audit and error lines reach the Logs page
+	defer log.SetOutput(old)
+
+	c := client()
+	get := func(path string, withCookie bool) (int, string) {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		if withCookie {
+			req.AddCookie(cookie)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	post := func(path string, form url.Values) {
+		req, _ := http.NewRequest("POST", ts.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		c.Do(req)
+	}
+
+	// both pages need a login
+	for _, p := range []string{"/logs", "/logs/stream", "/audit"} {
+		if code, _ := get(p, false); code != 303 {
+			t.Errorf("%s without a login should redirect, got %d", p, code)
+		}
+	}
+	// the pages render and are in the navigation
+	_, page := get("/logs", true)
+	if !strings.Contains(page, `data-url="/logs/stream"`) || !strings.Contains(page, `href="/audit"`) || !strings.Contains(page, `href="/logs"`) {
+		t.Fatal("Logs page or navigation links missing")
+	}
+
+	// actions are audited and logged, but a secret value is in neither
+	post("/apps", url.Values{"name": {"demo"}, "repo_url": {"https://example.com/r.git"}, "branch": {"main"}, "compose_file": {"docker-compose.yml"}})
+	post("/apps/demo/env", url.Values{"key": {"DB_PASSWORD"}, "value": {"s3cr3t-value"}, "secret": {"on"}})
+	_, audit := get("/audit", true)
+	if !strings.Contains(audit, "app.create") || !strings.Contains(audit, "env.set") || !strings.Contains(audit, "demo:DB_PASSWORD") {
+		t.Fatalf("audit page should list the actions:\n%s", audit)
+	}
+	if strings.Contains(audit, "s3cr3t-value") {
+		t.Fatal("secret value leaked into the audit page")
+	}
+	recent, _, cancel := hub.Subscribe(200)
+	cancel()
+	if joined := strings.Join(recent, "\n"); !strings.Contains(joined, "audit: admin env.set demo:DB_PASSWORD") || strings.Contains(joined, "s3cr3t-value") {
+		t.Fatalf("the log should record the action but never the value:\n%s", joined)
+	}
+
+	// the stream sends recent lines first, then live ones
+	req, _ := http.NewRequest("GET", ts.URL+"/logs/stream", nil)
+	req.AddCookie(cookie)
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	lines := make(chan string, 50)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			if l := sc.Text(); strings.HasPrefix(l, "data: ") {
+				lines <- strings.TrimPrefix(l, "data: ")
+			}
+		}
+	}()
+	waitFor := func(substr string) {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case l := <-lines:
+				if strings.Contains(l, substr) {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("did not see %q in the stream", substr)
+			}
+		}
+	}
+	waitFor("audit: admin env.set demo:DB_PASSWORD") // history
+	log.Printf("a brand new live line")
+	waitFor("a brand new live line") // live
+
+	// paging: more than one page of audit rows
+	for i := 0; i < 120; i++ {
+		srv.Store.Audit(context.Background(), "admin", "test.event", fmt.Sprintf("n%03d", i))
+	}
+	_, p1 := get("/audit", true)
+	m := regexp.MustCompile(`/audit\?before=(\d+)`).FindStringSubmatch(p1)
+	if m == nil || strings.Count(p1, "<code>") != 100 {
+		t.Fatalf("first page should have 100 rows and an Older link (rows=%d)", strings.Count(p1, "<code>"))
+	}
+	_, p2 := get("/audit?before="+m[1], true)
+	if strings.Contains(p2, "n119") || !strings.Contains(p2, "app.create") {
+		t.Fatal("the older page should continue where the first stopped")
+	}
+}
+
+func TestServicesFlow(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	srv.Sampler = &monitor.Sampler{Store: srv.Store, Box: srv.Box}
+	c := client()
+	do := func(method, path string, form url.Values, withCookie bool) (int, string, string) {
+		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if withCookie {
+			req.AddCookie(cookie)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b), r.Header.Get("Location")
+	}
+
+	for _, p := range []string{"/services", "/services/new", "/services/1"} {
+		if code, _, _ := do("GET", p, nil, false); code != 303 {
+			t.Errorf("%s without a login should redirect, got %d", p, code)
+		}
+	}
+	_, page, _ := do("GET", "/services/new", nil, true)
+	for _, want := range []string{`data-port="5432"`, `data-port="6379"`, `data-port="27017"`, `data-port="5672"`, "RabbitMQ", "Test connection", "pg_monitor"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("add form is missing %q", want)
+		}
+	}
+
+	// validation
+	bad := func(form url.Values, want string) {
+		t.Helper()
+		code, body, _ := do("POST", "/services", form, true)
+		if code != 400 || !strings.Contains(body, want) {
+			t.Errorf("want 400 containing %q, got %d", want, code)
+		}
+	}
+	bad(url.Values{"name": {"Bad Name"}, "kind": {"redis"}, "host": {"h"}, "port": {"6379"}}, "lowercase")
+	bad(url.Values{"name": {"r"}, "kind": {"redis"}, "host": {"bad host!"}, "port": {"6379"}}, "host name")
+	bad(url.Values{"name": {"r"}, "kind": {"redis"}, "host": {"h"}, "port": {"99999"}}, "port")
+	bad(url.Values{"name": {"r"}, "kind": {"nosuch"}, "host": {"h"}, "port": {"1"}}, "Choose a kind")
+	bad(url.Values{"name": {"w"}, "kind": {"http"}, "p_url": {"ftp://x"}}, "http://")
+	bad(url.Values{"name": {"r"}, "kind": {"redis"}, "host": {"h"}, "port": {"6379"}, "t_mem_pct": {"lots"}}, "number")
+
+	// an HTTP service that needs basic auth, to prove the password is used but never shown
+	secretServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, _ := r.BasicAuth(); u != "monitor" || p != "s3cr3t-pass" {
+			w.WriteHeader(401)
+		}
+	}))
+	defer secretServer.Close()
+	code, _, loc := do("POST", "/services", url.Values{"name": {"gopherpost"}, "kind": {"http"}, "p_url": {secretServer.URL}, "username": {"monitor"},
+		"password": {"s3cr3t-pass"}, "enabled": {"on"}, "t_latency_ms": {"1500"}, "fail_checks": {"3"}}, true)
+	if code != 303 || !strings.HasPrefix(loc, "/services/") {
+		t.Fatalf("create failed: %d %s", code, loc)
+	}
+	list, _ := srv.Store.ListServices(context.Background())
+	if len(list) != 1 || list[0].Params["t_latency_ms"] != "1500" || list[0].Params["fail_checks"] != "3" {
+		t.Fatalf("settings not stored: %+v", list)
+	}
+	if strings.Contains(string(list[0].Password), "s3cr3t-pass") || len(list[0].Password) == 0 {
+		t.Fatal("the password must be stored encrypted")
+	}
+	id := list[0].ID
+	idStr := strconv.FormatInt(id, 10)
+	if code, _, _ := do("POST", "/services", url.Values{"name": {"gopherpost"}, "kind": {"tcp"}, "host": {"h"}, "port": {"1"}}, true); code != 400 {
+		t.Fatal("a duplicate name must be refused")
+	}
+
+	// test connection (nothing saved): the saved password is used when editing with it left empty
+	code, frag, _ := do("POST", "/services/test", url.Values{"id": {idStr}, "kind": {"http"}, "p_url": {secretServer.URL}, "username": {"monitor"}}, true)
+	if code != 200 || !strings.Contains(frag, "Connected") || strings.Contains(frag, "s3cr3t-pass") {
+		t.Fatalf("test with the saved password should connect without leaking it: %d %s", code, frag)
+	}
+	_, frag, _ = do("POST", "/services/test", url.Values{"kind": {"http"}, "p_url": {secretServer.URL}, "username": {"monitor"}, "password": {"wrong"}}, true)
+	if !strings.Contains(frag, "Could not connect") || !strings.Contains(frag, "401") {
+		t.Fatalf("a wrong password must be reported: %s", frag)
+	}
+	_, frag, _ = do("POST", "/services/test", url.Values{"kind": {"tcp"}, "host": {"127.0.0.1"}, "port": {"1"}}, true)
+	if !strings.Contains(frag, "Could not connect") {
+		t.Fatalf("a closed port must be reported: %s", frag)
+	}
+	_, frag, _ = do("POST", "/services/test", url.Values{"kind": {"redis"}, "host": {"bad host"}, "port": {"6379"}}, true)
+	if !strings.Contains(frag, "host name") {
+		t.Fatalf("bad input is explained in the test result: %s", frag)
+	}
+
+	// three checks give the detail page real data
+	svc, _ := srv.Store.ServiceByID(context.Background(), id)
+	for i := 0; i < 3; i++ {
+		srv.Sampler.CheckService(context.Background(), *svc)
+		time.Sleep(20 * time.Millisecond)
+	}
+	_, detail, _ := do("GET", "/services/"+idStr+"?range=1h", nil, true)
+	for _, want := range []string{"gopherpost", `class="badge ok">Up<`, "chartsvg", "Response time", `href="/services/` + idStr + `?range=7d"`, `aria-current="true">1 hour`} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail page is missing %q", want)
+		}
+	}
+	for _, body := range []string{detail, page} {
+		if strings.Contains(body, "s3cr3t-pass") {
+			t.Fatal("the password leaked into a page")
+		}
+	}
+	if _, d2, _ := do("GET", "/services/"+idStr+"?range=bogus", nil, true); !strings.Contains(d2, `aria-current="true">24 hours`) {
+		t.Error("an unknown range should fall back to 24 hours")
+	}
+	if code, _, _ := do("GET", "/services/9999", nil, true); code != 404 {
+		t.Errorf("an unknown service should be 404, got %d", code)
+	}
+
+	// edit: the password is kept when the field is left empty; the kind cannot change
+	_, edit, _ := do("GET", "/services/"+idStr+"/edit", nil, true)
+	if !strings.Contains(edit, "saved, leave empty to keep") || strings.Contains(edit, "s3cr3t-pass") {
+		t.Fatal("the edit form should say a password is saved without showing it")
+	}
+	do("POST", "/services/"+idStr, url.Values{"kind": {"http"}, "p_url": {secretServer.URL}, "username": {"monitor"}, "t_latency_ms": {"900"}, "enabled": {"on"}}, true)
+	after, _ := srv.Store.ServiceByID(context.Background(), id)
+	if after.Params["t_latency_ms"] != "900" || len(after.Password) == 0 {
+		t.Fatalf("edit should update settings and keep the password: %+v", after.Params)
+	}
+	if code, body, _ := do("POST", "/services/"+idStr, url.Values{"kind": {"tcp"}, "host": {"h"}, "port": {"1"}}, true); code != 400 || !strings.Contains(body, "cannot be changed") {
+		t.Fatalf("changing the kind must be refused: %d", code)
+	}
+	do("POST", "/services/"+idStr, url.Values{"kind": {"http"}, "p_url": {secretServer.URL}, "clear_password": {"on"}, "enabled": {"on"}}, true)
+	if cleared, _ := srv.Store.ServiceByID(context.Background(), id); len(cleared.Password) != 0 {
+		t.Fatal("the password should be clearable")
+	}
+
+	// a service that is down raises an alert that the list page shows
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	_, _, _ = do("POST", "/services", url.Values{"name": {"mongo-main"}, "kind": {"tcp"}, "host": {"127.0.0.1"}, "port": {strconv.Itoa(port)}, "enabled": {"on"}}, true)
+	all, _ := srv.Store.ListServices(context.Background())
+	for _, v := range all {
+		if v.Name == "mongo-main" {
+			// creating the service already started a background first check; keep checking until
+			// two failures in a row have opened the alert
+			for i := 0; i < 20; i++ {
+				srv.Sampler.CheckService(context.Background(), v)
+				if open, _ := srv.Store.OpenAlertsFor(context.Background(), v.ID); len(open) > 0 {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}
+	_, list2, _ := do("GET", "/services", nil, true)
+	for _, want := range []string{"Active alerts", "mongo-main", "is down", `class="badge failed">Down<`, "Email alerts are not set up"} {
+		if !strings.Contains(list2, want) {
+			t.Errorf("services page is missing %q", want)
+		}
+	}
+
+	// check now and delete
+	if code, _, _ := do("POST", "/services/"+idStr+"/check", nil, true); code != 303 {
+		t.Errorf("check now: %d", code)
+	}
+	if code, _, _ := do("POST", "/services/"+idStr+"/delete", nil, true); code != 303 {
+		t.Errorf("delete: %d", code)
+	}
+	if gone, _ := srv.Store.ServiceByID(context.Background(), id); gone != nil {
+		t.Fatal("the service should be gone")
+	}
+	rows, _ := srv.Store.ListAudit(context.Background(), 50, 0)
+	var actions []string
+	for _, r := range rows {
+		actions = append(actions, r.Action)
+		if strings.Contains(r.Target, "s3cr3t") {
+			t.Fatal("a secret reached the audit log")
+		}
+	}
+	joined := strings.Join(actions, " ")
+	for _, want := range []string{"service.create", "service.test", "service.update", "service.delete"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("audit is missing %s (have %s)", want, joined)
+		}
+	}
+}
+
+func TestSuggestedServices(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	srv.Sampler = &monitor.Sampler{Store: srv.Store, Box: srv.Box}
+	srv.ExpectedServices = []config.ExpectedService{
+		{Name: "redis-main", Kind: "redis", Host: "127.0.0.1", Port: 6379, Note: "Host Redis."},
+		{Name: "gotenberg", Kind: "http", Host: "127.0.0.1", Port: 3025, Params: map[string]string{"url": "http://127.0.0.1:3025/health"}, Note: "PDF."},
+	}
+	c := client()
+	get := func(path string) string {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.AddCookie(cookie)
+		r, _ := c.Do(req)
+		b, _ := io.ReadAll(r.Body)
+		return string(b)
+	}
+	page := get("/services")
+	if !strings.Contains(page, "Suggested for this server") || !strings.Contains(page, "redis-main") || !strings.Contains(page, "/services/new?preset=gotenberg") {
+		t.Fatalf("suggestions should be listed:\n%s", page)
+	}
+	form := get("/services/new?preset=gotenberg")
+	for _, want := range []string{`value="gotenberg"`, `value="3025"`, `value="http://127.0.0.1:3025/health"`, `<option value="http" data-port="0" selected>`} {
+		if !strings.Contains(form, want) {
+			t.Errorf("the preset should pre-fill the form (missing %s)", want)
+		}
+	}
+	if strings.Contains(get("/services/new?preset=nope"), `value="gotenberg"`) {
+		t.Error("an unknown preset must not pre-fill anything")
+	}
+	// adding one removes it from the suggestions
+	req, _ := http.NewRequest("POST", ts.URL+"/services", strings.NewReader(url.Values{"name": {"redis-main"}, "kind": {"redis"}, "host": {"127.0.0.1"}, "port": {"6379"}, "enabled": {"on"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	c.Do(req)
+	if after := get("/services"); strings.Contains(after, "preset=redis-main") || !strings.Contains(after, "preset=gotenberg") {
+		t.Error("an added service should leave the suggestions, the others stay")
+	}
+}
+
+func TestRequestLog(t *testing.T) {
+	_, _, srv, cookie := setupLoggedIn(t)
+	hub := logs.NewHub(500)
+	old := log.Writer()
+	log.SetOutput(hub)
+	defer log.SetOutput(old)
+
+	serve := func(mode string) *httptest.Server {
+		srv.RequestLog = mode
+		h, err := srv.Handler()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := httptest.NewServer(h)
+		t.Cleanup(s.Close)
+		return s
+	}
+	lines := func() []string {
+		recent, _, cancel := hub.Subscribe(500)
+		cancel()
+		var out []string
+		for _, l := range recent {
+			if strings.HasPrefix(l[strings.Index(l, " ")+1:][strings.Index(l[strings.Index(l, " ")+1:], " ")+1:], "http: ") || strings.Contains(l, " http: ") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	c := client()
+	call := func(ts *httptest.Server, method, path string, form url.Values, headers map[string]string, auth bool) int {
+		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		if auth {
+			req.AddCookie(cookie)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, r.Body)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	has := func(substr string) bool {
+		for _, l := range lines() {
+			if strings.Contains(l, substr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// quiet (the default): page requests are logged, background noise is not
+	quiet := serve("quiet")
+	call(quiet, "GET", "/", nil, nil, true)
+	call(quiet, "GET", "/static/app.css", nil, nil, false)
+	call(quiet, "POST", "/apps", url.Values{"name": {"demo"}, "repo_url": {"https://example.com/r.git"}, "branch": {"main"}, "compose_file": {"docker-compose.yml"}}, nil, true)
+	call(quiet, "GET", "/apps/demo/status", nil, map[string]string{"HX-Request": "true"}, true)  // htmx polling
+	call(quiet, "GET", "/apps/ghost/status", nil, map[string]string{"HX-Request": "true"}, true) // a failing poll is still logged
+	call(quiet, "POST", "/login", url.Values{"username": {"admin"}, "password": {"hunter2-secret"}, "code": {"000000"}}, nil, false)
+	call(quiet, "GET", "/nope", nil, nil, true)
+	call(quiet, "POST", "/apps/demo/env", url.Values{"key": {"DB_PASSWORD"}, "value": {"s3cr3t-value"}, "secret": {"on"}}, nil, true)
+	call(quiet, "GET", "/apps/demo?msg=flash-secret-text&err=boom", nil, map[string]string{"X-Forwarded-For": "203.0.113.9, 10.0.0.1"}, true)
+
+	if !has("http: GET / 200") || !has("user=admin ip=127.0.0.1") {
+		t.Fatalf("a page request should be logged with its user:\n%s", strings.Join(lines(), "\n"))
+	}
+	if !has("http: POST /apps 303") {
+		t.Error("a POST that redirects should be logged with 303")
+	}
+	if has("/static/app.css") {
+		t.Error("static files must not be logged in quiet mode")
+	}
+	if has("GET /apps/demo/status") {
+		t.Error("successful htmx polling must not be logged in quiet mode")
+	}
+	if !has("GET /apps/ghost/status 404") {
+		t.Error("a failing background request should still be logged")
+	}
+	if !has("http: POST /login 401") || !has("POST /login 401") {
+		t.Error("a failed login should be logged")
+	}
+	if !has("http: GET /nope 404") {
+		t.Error("a 404 should be logged")
+	}
+	if !has("xff=203.0.113.9") {
+		t.Error("the forwarded address should be shown, marked as such")
+	}
+	all := strings.Join(lines(), "\n")
+	for _, secret := range []string{"hunter2-secret", "s3cr3t-value", "flash-secret-text", "boom", "msg=", "?"} {
+		if strings.Contains(all, secret) {
+			t.Fatalf("the request log must never contain %q:\n%s", secret, all)
+		}
+	}
+	if !strings.Contains(all, "http: GET /apps/demo 200") {
+		t.Error("the path is logged without its query string")
+	}
+
+	// all: everything, including static files and polling
+	before := len(lines())
+	every := serve("all")
+	call(every, "GET", "/static/app.css", nil, nil, false)
+	call(every, "GET", "/apps/demo/status", nil, map[string]string{"HX-Request": "true"}, true)
+	if got := lines()[before:]; len(got) != 2 {
+		t.Errorf("mode all should log both requests, got %v", got)
+	}
+
+	// off: nothing
+	before = len(lines())
+	off := serve("off")
+	call(off, "GET", "/", nil, nil, true)
+	if len(lines()) != before {
+		t.Error("mode off must log nothing")
 	}
 }

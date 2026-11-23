@@ -210,3 +210,23 @@ func TestCheckComposeRefusesV1AndAcceptsV2(t *testing.T) {
 		t.Fatalf("a missing command should explain the fix, got %v", err)
 	}
 }
+
+func TestProjectName(t *testing.T) {
+	if got := ProjectName(store.App{Name: "kite360-api"}); got != "berth-kite360-api" {
+		t.Errorf("default project: %s", got)
+	}
+	if got := ProjectName(store.App{Name: "tusk", ComposeProject: "tusk"}); got != "tusk" {
+		t.Errorf("adopted project: %s", got)
+	}
+	ok := store.App{RepoURL: "https://x/y", Branch: "main", ComposeFile: "docker-compose.yml", ComposeProject: "tams-nuxt"}
+	if err := ValidateApp(ok); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"Bad Name", "-x", "a/b", "x;y", ""} {
+		a := ok
+		a.ComposeProject = bad
+		if bad != "" && ValidateApp(a) == nil {
+			t.Errorf("project %q should be rejected", bad)
+		}
+	}
+}

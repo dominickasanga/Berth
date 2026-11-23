@@ -63,6 +63,7 @@ document.addEventListener('submit', function (e) {
   dock.addEventListener('click', function () { setMode('inline'); });
   latest.addEventListener('click', function () { latest.hidden = true; toBottom(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && mode !== 'inline') setMode('inline'); });
+  if (start.hasAttribute('data-autostart')) start.click(); // the Berth Logs page starts streaming on load
   // The "Logs" button in the Status card (re-rendered every 10s, so listen on the document).
   document.addEventListener('click', function (e) {
     if (!e.target.closest || !e.target.closest('[data-open-logs]')) return;
@@ -92,4 +93,26 @@ document.addEventListener('htmx:afterSwap', function (e) {
     var here = href === '/' ? (path === '/' || path.indexOf('/apps') === 0) : path.indexOf(href) === 0;
     if (here) a.setAttribute('aria-current', 'page');
   });
+})();
+
+// Service form: show only the chosen kind's settings (and fill in its usual port when adding).
+(function () {
+  var sel = document.getElementById('kindsel');
+  var kindSource = sel || document.querySelector('#svcform input[name=kind]');
+  if (!kindSource) return;
+  var port = document.getElementById('portin');
+  function show() {
+    document.querySelectorAll('.kindbox').forEach(function (b) {
+      var on = b.getAttribute('data-kind') === kindSource.value;
+      b.hidden = !on;
+      // only the visible kind's fields are submitted, so another kind's empty fields cannot override them
+      b.querySelectorAll('input').forEach(function (i) { i.disabled = !on; });
+    });
+  }
+  if (sel) sel.addEventListener('change', function () {
+    var p = sel.options[sel.selectedIndex].getAttribute('data-port');
+    if (port && p && p !== '0') port.value = p;
+    show();
+  });
+  show();
 })();
