@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -64,10 +65,47 @@ func readPassword() string {
 	return string(a)
 }
 
+// version is the git commit this binary was built from (Go embeds it when building in a git checkout).
+func version() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	rev, modified, when := "", false, ""
+	for _, kv := range bi.Settings {
+		switch kv.Key {
+		case "vcs.revision":
+			rev = kv.Value
+		case "vcs.modified":
+			modified = kv.Value == "true"
+		case "vcs.time":
+			when = kv.Value
+		}
+	}
+	if rev == "" {
+		return "dev (built outside a git checkout)"
+	}
+	if len(rev) > 8 {
+		rev = rev[:8]
+	}
+	v := rev
+	if modified {
+		v += "+local-changes"
+	}
+	if when != "" {
+		v += " (" + when + ")"
+	}
+	return v
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: berth serve | berth admin-create <username>")
 		os.Exit(2)
+	}
+	if os.Args[1] == "version" { // needs no settings
+		fmt.Println("berth", version())
+		return
 	}
 	ctx := context.Background()
 	dsn := os.Getenv("BERTH_DATABASE_URL")
@@ -133,6 +171,7 @@ func main() {
 		if v, warn, err := deploy.CheckCompose(composeCmd); err != nil {
 			log.Fatal(err)
 		} else {
+			log.Printf("berth %s", version())
 			log.Printf("docker compose %s", v)
 			if warn != "" {
 				log.Print("warning: " + warn)
@@ -159,6 +198,7 @@ func main() {
 		}
 		srv := &web.Server{
 			RequestLog:       requestLog,
+			Version:          version(),
 			ExpectedServices: expectedServices,
 			BasePath:         basePath,
 			Expected:         expected,

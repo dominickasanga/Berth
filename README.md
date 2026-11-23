@@ -498,3 +498,28 @@ password if it listens on loopback only.
 **Not built yet:** metrics for the apps' own containers (CPU, memory, restarts) and the Docker
 engine, and the managed-service actions (create a database and user, backups, restore, flush,
 prune). Monitoring is read-only.
+
+## 13. Updating Berth on the server
+
+Berth does not update itself. The server holds a git checkout of this repository, so an update is
+**pull, build, swap, restart**. `./update.sh` does all four:
+
+```sh
+cd /mnt/blockvolume/Berth
+./update.sh
+```
+
+- It runs `git pull --ff-only`, builds to `berth.new` beside the running binary, keeps the old one as
+  `berth.prev`, swaps with an atomic `mv` (safe while Berth is running), and restarts the `berth`
+  systemd service if there is one. Otherwise it tells you to restart by hand.
+- **Database changes are automatic:** Berth applies its own migrations when it starts. They only add
+  tables and columns. Take a copy first if you like: `pg_dump "$BERTH_DATABASE_URL" -Fc -f ~/berth-$(date +%F).dump`.
+- **Which build is running:** `./berth version`, the `berth <commit>` line at startup, and the footer of
+  every page. `+local-changes` means the folder had uncommitted edits when it was built.
+- **Way back:** `mv -f berth.prev berth && sudo systemctl restart berth`. Migrations are not undone,
+  but they are additive, so the previous build keeps working.
+- **First time only:** if the folder was copied by hand and `git pull` complains about local changes,
+  `git status` shows what differs. For a source-only folder like this one,
+  `git fetch origin && git reset --hard origin/main` is safe (it never touches `data/`, which is ignored).
+- If the repository is private, `git pull` needs credentials on the server (an SSH remote or a token).
+- Needs Go 1.26 or newer (the server has 1.27.3) and internet access for the Go modules.

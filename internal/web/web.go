@@ -55,6 +55,8 @@ type Server struct {
 	// Sampler checks the supporting services; MailOn says whether alert emails are configured.
 	Sampler *monitor.Sampler
 	MailOn  bool
+	// Version is shown in the page footer so you can see which build is running.
+	Version string
 	// RequestLog is "quiet" (default), "all" or "off": see logRequests.
 	RequestLog string
 	// ExpectedServices are the services suggested on the Services page.
@@ -80,8 +82,9 @@ func (s *Server) Handler() (http.Handler, error) {
 	static, _ := fs.Sub(staticFS, "static")
 	ver := staticVersion(static)
 	funcs := template.FuncMap{
-		"v":    func() string { return ver },
-		"base": func() string { return s.BasePath },
+		"v":       func() string { return ver },
+		"base":    func() string { return s.BasePath },
+		"version": func() string { return s.Version },
 		"icon": func(name string) template.HTML { // one icon from the cached sprite
 			return template.HTML(`<svg class="i" aria-hidden="true" focusable="false"><use href="` + s.BasePath + `/static/icons.svg?v=` + ver + `#` + name + `"/></svg>`)
 		},

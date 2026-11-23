@@ -11,4 +11,5 @@
 <button type="button" class="plain" id="theme-toggle" aria-label="Switch between light and dark mode"><span class="i-moon">{{icon "moon"}}</span><span class="i-sun">{{icon "sun"}}</span></button>
 {{with .}}{{if .User}}<span class="user">{{icon "circle-dot"}}<span>{{.User}}</span></span><form method="post" action="{{base}}/logout"><button class="plain">{{icon "log-out"}}Log out</button></form>{{end}}{{end}}
 </header><main>{{block "crumbs" .}}{{end}}{{template "content" .}}</main>
+{{if version}}<footer class="foot">Berth {{version}}</footer>{{end}}
 <script src="{{base}}/static/htmx.min.js?v={{v}}"></script><script src="{{base}}/static/app.js?v={{v}}"></script></body></html>{{end}}

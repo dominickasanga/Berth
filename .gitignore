@@ -2,3 +2,4 @@
 /berth
 *.env
 /berth-*
+/berth.*
