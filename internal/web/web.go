@@ -13,13 +13,16 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/dominickasanga/berth/config"
 	"github.com/dominickasanga/berth/internal/crypt"
 	"github.com/dominickasanga/berth/internal/deploy"
+	"github.com/dominickasanga/berth/internal/discover"
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
@@ -38,6 +41,7 @@ type Server struct {
 	Box          *crypt.Box
 	Deploy       *deploy.Engine
 	CookieSecure bool
+	Expected     []config.ExpectedApp
 
 	tpl       map[string]*template.Template
 	dummyHash []byte
@@ -56,7 +60,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	s.fails = map[string]*failState{}
 	s.dummyHash, _ = bcrypt.GenerateFromPassword([]byte("berth"), bcrypt.DefaultCost)
 	s.tpl = map[string]*template.Template{}
-	for _, page := range []string{"login", "apps", "app_new", "app"} {
+	for _, page := range []string{"login", "apps", "app_new", "app", "discover"} {
 		t, err := template.New("").ParseFS(tplFS, "templates/layout.html", "templates/"+page+".html")
 		if err != nil {
 			return nil, err
@@ -76,6 +80,11 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /{$}", s.auth(s.appsPage))
+	mux.HandleFunc("GET /discover", s.auth(s.discoverPage))
+	mux.HandleFunc("POST /discover/paths", s.auth(s.discoverAddPath))
+	mux.HandleFunc("POST /discover/paths/delete", s.auth(s.discoverDeletePath))
+	mux.HandleFunc("POST /discover/choose", s.auth(s.discoverChoose))
+	mux.HandleFunc("POST /discover/register", s.auth(s.discoverRegister))
 	mux.HandleFunc("GET /apps/new", s.auth(s.appNewPage))
 	mux.HandleFunc("POST /apps", s.auth(s.appCreate))
 	mux.HandleFunc("GET /apps/{name}", s.auth(s.appPage))
@@ -463,4 +472,146 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request, a *store.Admi
 	}
 	fmt.Fprint(w, "event: end\ndata: log stream ended\n\n")
 	fl.Flush()
+}
+
+// ---- discovery ----
+
+type discoverRow struct {
+	App         config.ExpectedApp
+	Copies      []discover.Candidate
+	Chosen      string // path of the copy that will be used
+	NeedsChoice bool
+	Registered  bool
+}
+
+func (s *Server) scan(ctx context.Context) (paths []string, found map[string][]discover.Candidate, notes []discover.PathNote, err error) {
+	if paths, err = s.Store.ListScanPaths(ctx); err != nil {
+		return
+	}
+	found, notes = discover.Scan(paths, s.Expected)
+	return
+}
+
+func (s *Server) discoverPage(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	paths, found, notes, err := s.scan(r.Context())
+	choices, err2 := s.Store.Choices(r.Context())
+	apps, err3 := s.Store.ListApps(r.Context())
+	if err != nil || err2 != nil || err3 != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	registered := map[string]bool{}
+	for _, ap := range apps {
+		registered[ap.Name] = true
+	}
+	rows := make([]discoverRow, 0, len(s.Expected))
+	for _, x := range s.Expected {
+		c, need := discover.Resolve(found[x.Name], choices[x.Name])
+		row := discoverRow{App: x, Copies: found[x.Name], NeedsChoice: need, Registered: registered[x.Name]}
+		if c != nil {
+			row.Chosen = c.Path
+		}
+		rows = append(rows, row)
+	}
+	s.render(w, "discover", map[string]any{"User": a.Username, "Paths": paths, "Notes": notes, "Rows": rows,
+		"Flash": r.URL.Query().Get("msg"), "Error": r.URL.Query().Get("err")})
+}
+
+func discoverRedirect(w http.ResponseWriter, r *http.Request, key, msg string) {
+	http.Redirect(w, r, "/discover?"+key+"="+url.QueryEscape(msg), http.StatusSeeOther)
+}
+
+func (s *Server) discoverAddPath(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	p := strings.TrimSpace(r.FormValue("path"))
+	if p == "" || !filepath.IsAbs(p) || strings.ContainsRune(p, 0) {
+		discoverRedirect(w, r, "err", "Enter an absolute folder path such as /var/www")
+		return
+	}
+	p = filepath.Clean(p)
+	if err := s.Store.AddScanPath(r.Context(), p); err != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	s.Store.Audit(r.Context(), a.Username, "scanpath.add", p)
+	discoverRedirect(w, r, "msg", "Added "+p)
+}
+
+func (s *Server) discoverDeletePath(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	p := r.FormValue("path")
+	s.Store.DeleteScanPath(r.Context(), p)
+	s.Store.Audit(r.Context(), a.Username, "scanpath.delete", p)
+	discoverRedirect(w, r, "msg", "Removed "+p)
+}
+
+func (s *Server) expectedByName(name string) *config.ExpectedApp {
+	for i := range s.Expected {
+		if s.Expected[i].Name == name {
+			return &s.Expected[i]
+		}
+	}
+	return nil
+}
+
+// discoverChoose flags which on-disk copy to use; the path must be a copy found right now.
+func (s *Server) discoverChoose(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	x := s.expectedByName(r.FormValue("expected"))
+	if x == nil {
+		http.NotFound(w, r)
+		return
+	}
+	_, found, _, err := s.scan(r.Context())
+	if err != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	path := r.FormValue("path")
+	for _, c := range found[x.Name] {
+		if c.Path == path {
+			s.Store.SetChoice(r.Context(), x.Name, path)
+			s.Store.Audit(r.Context(), a.Username, "discover.choose", x.Name+" -> "+path)
+			discoverRedirect(w, r, "msg", "Using "+path+" for "+x.Title)
+			return
+		}
+	}
+	discoverRedirect(w, r, "err", "That folder was not found in this scan; nothing was changed.")
+}
+
+func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	x := s.expectedByName(r.FormValue("expected"))
+	if x == nil {
+		http.NotFound(w, r)
+		return
+	}
+	_, found, _, err := s.scan(r.Context())
+	choices, err2 := s.Store.Choices(r.Context())
+	if err != nil || err2 != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	c, need := discover.Resolve(found[x.Name], choices[x.Name])
+	if need {
+		discoverRedirect(w, r, "err", x.Title+" was found in more than one place. Flag the copy to use first.")
+		return
+	}
+	app := store.App{Name: x.Name, RepoURL: x.Repo, Branch: x.Branch, Subfolder: x.Subfolder,
+		ComposeFile: x.ComposeFile, PredeploySvc: x.PredeployService, Monitor: x.Monitor}
+	if c != nil {
+		app.SourcePath = c.Path
+		if c.RemoteMatch { // the remote already works on this server (e.g. its SSH form)
+			app.RepoURL = c.Remote
+		}
+		if c.RemoteMatch && c.Branch != "" && !strings.HasPrefix(c.Branch, "-") {
+			app.Branch = c.Branch
+		}
+	}
+	err = deploy.ValidateApp(app)
+	if err == nil {
+		err = s.Store.CreateApp(r.Context(), app)
+	}
+	if err != nil {
+		discoverRedirect(w, r, "err", "Could not register "+x.Title+": already registered or invalid settings.")
+		return
+	}
+	s.Store.Audit(r.Context(), a.Username, "app.create", app.Name+" (discovered)")
+	http.Redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape("registered from discovery"), http.StatusSeeOther)
 }

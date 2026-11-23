@@ -1,9 +1,10 @@
 {{define "layout"}}<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Berth</title>
+<script src="/static/theme.js"></script>
 <style>
-:root{--bg:#f6f8fa;--fg:#14202b;--card:#fff;--line:#d7dee5;--accent:#0f2a43;--ok:#15803d;--bad:#b91c1c;--mute:#5b6b7a}
-@media(prefers-color-scheme:dark){:root{--bg:#0b1722;--fg:#e6edf3;--card:#12212f;--line:#25384a;--accent:#38bdf8;--mute:#8b9bab}}
+:root{color-scheme:light;--bg:#f6f8fa;--fg:#14202b;--card:#fff;--line:#d7dee5;--accent:#0f2a43;--ok:#15803d;--bad:#b91c1c;--mute:#5b6b7a}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0b1722;--fg:#e6edf3;--card:#12212f;--line:#25384a;--accent:#38bdf8;--mute:#8b9bab}
 *{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
 header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line)}
 header a{color:var(--fg);text-decoration:none;font-weight:700}header .sp{flex:1}header form{margin:0}
@@ -13,13 +14,15 @@ h1{font-size:22px;margin:0 0 16px}h2{font-size:16px;margin:0 0 12px}
 table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
 label{display:block;margin:10px 0 4px;font-weight:600}input[type=text],input[type=password]{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 button,.btn{padding:7px 14px;border:0;border-radius:6px;background:var(--accent);color:#fff;cursor:pointer;font:inherit;text-decoration:none;display:inline-block}
-@media(prefers-color-scheme:dark){button,.btn{color:#06121c}}
+:root[data-theme="dark"] button,:root[data-theme="dark"] .btn{color:#06121c}
+:root[data-theme="dark"] button.danger{color:#fff}
 button.plain{background:transparent;color:var(--fg);border:1px solid var(--line)}button.danger{background:var(--bad);color:#fff}
 .err{color:var(--bad)}.flash{color:var(--ok)}.mute{color:var(--mute)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;max-height:420px;font-size:12.5px;white-space:pre-wrap}
 .ok{color:var(--ok)}.failed{color:var(--bad)}
 </style></head><body>
 <header><a href="/">Berth</a><span class="sp"></span>
-{{with .}}{{if .User}}<span class="mute">{{.User}}</span><form method="post" action="/logout"><button class="plain">Log out</button></form>{{end}}{{end}}
+<button type="button" class="plain" id="theme-toggle" aria-label="Switch between light and dark mode"></button>
+{{with .}}{{if .User}}<a href="/discover" style="font-weight:500">Discover</a><span class="mute">{{.User}}</span><form method="post" action="/logout"><button class="plain">Log out</button></form>{{end}}{{end}}
 </header><main>{{template "content" .}}</main>
 <script src="/static/htmx.min.js"></script><script src="/static/app.js"></script></body></html>{{end}}

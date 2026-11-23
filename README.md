@@ -4,7 +4,7 @@
 
 > **Status:** milestones 1 and 2 built (login with 2FA, app registry, env/secrets,
 > git deploy via compose, pre-deploy step, start/stop/restart, status, live
-> container logs, rollback). Not built yet: metrics and alerts, the managed
+> container logs, rollback, discovery of expected apps on disk). Not built yet: metrics and alerts, the managed
 > services (Postgres/Mongo/Redis/Docker), Kite360-specific actions. Not yet run
 > against the real Kite360 repos or a real server. This file is the source
 > of truth for the next developer or AI agent picking this up. Read it fully before
@@ -195,7 +195,7 @@ createdb berth                                  # dedicated database for Berth
 export BERTH_DATABASE_URL='postgres:///berth?host=/tmp'
 export BERTH_SECRET_KEY=$(openssl rand -base64 32)   # keep it: losing it makes stored secrets unreadable
 go build -o berth ./cmd/berth
-echo 'a-password-of-12+-chars' | ./berth admin-create dominic   # prints the 2FA URL for your authenticator app
+./berth admin-create dominic   # asks for a password (min 8 chars, hidden), prints a 2FA QR code to scan
 ./berth serve                                   # http://127.0.0.1:8090
 ```
 
@@ -230,7 +230,7 @@ How a deploy treats the app's compose file:
 
 Tests: `go test ./...`. The web test needs a scratch database:
 `createdb berth_test; BERTH_TEST_DATABASE_URL='postgres:///berth_test?host=/tmp' go test ./...`
-(it truncates that database's tables).
+(it drops and recreates that database's `public` schema, so use a scratch database).
 
 Decided not to build: per-app deploy keys. Berth runs `git` as the user it runs as,
 so a private repo works only if that user already has access (SSH key, credential
@@ -238,3 +238,31 @@ helper, or a token in the repo URL). Berth stores no git credentials.
 
 Known gaps in milestone 1: TOTP codes can be replayed within their 30-second
 window, login throttling is in memory, and all admins have equal rights.
+
+## 9. Discovering expected apps
+
+The built-in list of apps Berth expects is `config/expected-apps.yaml` (embedded in
+the binary, so edit it and rebuild). Today it holds the two pilot apps, Kite360 web
+and Kite360 API, both with `monitor: true`.
+
+The **Discover** page scans folders for them. Default scan paths are `/var/www` and
+`/mnt/blockvolume`; add or remove paths on that page (stored in Postgres). Berth
+looks one level deep and only reads folder names plus each folder's `.git/config`
+and `.git/HEAD`; it never runs anything in them.
+
+- **Matching** is by git remote URL (https, ssh and `git@host:path` forms compare
+  equal) **and** by folder name (the entry's `name` or its `folder_names`). A folder
+  whose name matches but whose remote is a different repo is shown with a warning.
+- **Two copies** (for example one under `/var/www`, one under `/mnt/blockvolume`):
+  the page lists both and blocks "Register" until you flag one with "Use this copy".
+  The flag is stored, and asked again if the flagged folder disappears.
+- **Register** creates the app from the YAML entry. If the discovered remote matches
+  the expected repo, Berth uses that remote and its current branch, since that form
+  already works on that server. Credentials in a remote URL are stripped and never
+  stored or shown.
+- **Berth deploys from its own clone** under `BERTH_DATA_DIR/checkouts`. The
+  discovered folder is recorded as `source_path` for reference and is never modified,
+  because a live folder can hold uncommitted changes that `git reset --hard` would
+  destroy.
+- **monitor** is recorded on the app and shown on its page. It does nothing until
+  the metrics milestone is built.

@@ -1,0 +1,29 @@
+# Apps Berth expects to find on a server. Berth scans the configured paths
+# (default /var/www and /mnt/blockvolume; editable on the Discover page) and
+# matches folders to these entries by git remote URL and by folder name.
+#
+# monitor: true marks the app for monitoring (container stats, health, and its
+# database/cache services) once metrics are built. Today it is only recorded.
+#
+# folder_names are matched case-insensitively. The entry's name is matched too.
+apps:
+  - name: kite360-web
+    title: Kite360 web
+    repo: https://github.com/dominickasanga/kite360
+    branch: main
+    subfolder: app/tams-nuxt
+    compose_file: docker-compose.yml
+    folder_names: [kite360, kite360-web]
+    public_url: https://kite360.live
+    monitor: true
+
+  - name: kite360-api
+    title: Kite360 API
+    repo: https://github.com/dominickasanga/Kite360-API
+    branch: main
+    subfolder: go-api
+    compose_file: docker-compose.yml
+    predeploy_service: migrate   # runs shared + tenant migrations; failure keeps the old container running
+    folder_names: [kite360-api]
+    public_url: https://proworkwave.com/api2/
+    monitor: true

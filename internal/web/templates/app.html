@@ -8,7 +8,9 @@
 <button class="plain" name="action" value="start">Start</button>
 <button class="plain" name="action" value="stop">Stop</button>
 <button class="plain" name="action" value="restart">Restart</button></form>
-<p class="mute">{{.App.RepoURL}} · {{.App.Branch}}{{if .App.Subfolder}} · {{.App.Subfolder}}{{end}} · {{.App.ComposeFile}}{{if .App.PredeploySvc}} · pre-deploy: {{.App.PredeploySvc}}{{end}}</p></div>
+<p class="mute">{{.App.RepoURL}} · {{.App.Branch}}{{if .App.Subfolder}} · {{.App.Subfolder}}{{end}} · {{.App.ComposeFile}}{{if .App.PredeploySvc}} · pre-deploy: {{.App.PredeploySvc}}{{end}}</p>
+{{if .App.Monitor}}<p class="mute">Flagged for monitoring.</p>{{end}}
+{{if .App.SourcePath}}<p class="mute">Found on this server at <code>{{.App.SourcePath}}</code>. Berth deploys from its own clone and never changes that folder.</p>{{end}}</div>
 <div class="card"><h2>Environment &amp; secrets</h2>
 <table>{{range .Env}}<tr><td><code>{{.Key}}</code></td><td>{{if .IsSecret}}<span class="mute">secret, hidden</span>{{else}}<code>{{.Value}}</code>{{end}}</td>
 <td><form method="post" action="/apps/{{$.App.Name}}/env/delete" data-confirm="Remove {{.Key}}?"><input type="hidden" name="key" value="{{.Key}}"><button class="plain">Remove</button></form></td></tr>

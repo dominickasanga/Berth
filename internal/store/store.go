@@ -139,13 +139,15 @@ type App struct {
 	Subfolder    string
 	ComposeFile  string
 	PredeploySvc string
+	SourcePath   string
+	Monitor      bool
 }
 
-const appCols = `id, name, repo_url, branch, subfolder, compose_file, predeploy_svc`
+const appCols = `id, name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor`
 
 func scanApp(row pgx.Row) (*App, error) {
 	a := &App{}
-	err := row.Scan(&a.ID, &a.Name, &a.RepoURL, &a.Branch, &a.Subfolder, &a.ComposeFile, &a.PredeploySvc)
+	err := row.Scan(&a.ID, &a.Name, &a.RepoURL, &a.Branch, &a.Subfolder, &a.ComposeFile, &a.PredeploySvc, &a.SourcePath, &a.Monitor)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -153,8 +155,8 @@ func scanApp(row pgx.Row) (*App, error) {
 }
 
 func (s *Store) CreateApp(ctx context.Context, a App) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO apps (name, repo_url, branch, subfolder, compose_file, predeploy_svc)
-		VALUES ($1,$2,$3,$4,$5,$6)`, a.Name, a.RepoURL, a.Branch, a.Subfolder, a.ComposeFile, a.PredeploySvc)
+	_, err := s.Pool.Exec(ctx, `INSERT INTO apps (name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, a.Name, a.RepoURL, a.Branch, a.Subfolder, a.ComposeFile, a.PredeploySvc, a.SourcePath, a.Monitor)
 	return err
 }
 
@@ -177,6 +179,58 @@ func (s *Store) ListApps(ctx context.Context) ([]App, error) {
 		out = append(out, *a)
 	}
 	return out, rows.Err()
+}
+
+// ---- discovery ----
+
+func (s *Store) ListScanPaths(ctx context.Context) ([]string, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT path FROM scan_paths ORDER BY added_at, path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddScanPath(ctx context.Context, path string) error {
+	_, err := s.Pool.Exec(ctx, `INSERT INTO scan_paths (path) VALUES ($1) ON CONFLICT DO NOTHING`, path)
+	return err
+}
+
+func (s *Store) DeleteScanPath(ctx context.Context, path string) error {
+	_, err := s.Pool.Exec(ctx, `DELETE FROM scan_paths WHERE path=$1`, path)
+	return err
+}
+
+func (s *Store) Choices(ctx context.Context) (map[string]string, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT expected, path FROM expected_choice`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SetChoice(ctx context.Context, expected, path string) error {
+	_, err := s.Pool.Exec(ctx, `INSERT INTO expected_choice (expected, path) VALUES ($1,$2)
+		ON CONFLICT (expected) DO UPDATE SET path=EXCLUDED.path`, expected, path)
+	return err
 }
 
 // ---- env ----
