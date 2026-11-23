@@ -347,6 +347,7 @@ and `.git/HEAD`; it never runs anything in them.
 - **Matching** is by git remote URL (https, ssh and `git@host:path` forms compare
   equal) **and** by folder name (the entry's `name` or its `folder_names`). A folder
   whose name matches but whose remote is a different repo is shown with a warning.
+- **Renamed repositories:** an expected app can list `repo_aliases`, other URLs of the same repository (its old name, for example). `kite360-web` lists `proworkwave_erp` and `kite360-api` lists `visionary_erp_api` (GitHub redirects each to the new name; both give the same commit), so the folder on the server whose remote still says `proworkwave_erp` is recognised. With "use the existing folder", Berth keeps using the remote that already works in that folder.
 - **Two copies** (for example one under `/var/www`, one under `/mnt/blockvolume`):
   the page lists both and you flag one with "Use this copy" before it can be used as
   the existing folder. The flag is stored, and asked again if the flagged folder
@@ -449,10 +450,10 @@ against real PostgreSQL, Redis, MongoDB and RabbitMQ.
 
 | Kind | What it checks |
 |---|---|
-| **PostgreSQL** | version, uptime, connections vs `max_connections`, transactions/s, cache hit ratio, deadlocks, waiting locks, long-running queries (text shown to `pg_monitor`/superusers), databases with sizes and connections, optional schema sizes (for the Kite360 tenants) |
+| **PostgreSQL** | version, uptime, connections vs `max_connections` (idle and idle-in-transaction counts, and a table of who holds them grouped by application, with numbered names like pgAdmin's collapsed), transactions/s, cache hit ratio, deadlocks, waiting locks, long-running queries (text shown to `pg_monitor`/superusers), databases with sizes and connections, optional schema sizes (for the Kite360 tenants) |
 | **Redis** | version, role, memory (and % of `maxmemory`), clients, ops/s, keyspace hit ratio, evictions/s, keys, `PING` latency. Uses a small built-in client, no library |
 | **MongoDB** | version, uptime, connections, ops/s, resident memory, databases and sizes, ping latency |
-| **RabbitMQ** | through the management API: ready/unacked messages, publish and deliver rates, connections, consumers, memory vs limit, disk free, file descriptors, resource alarms, the queues with most messages. If the management port is closed Berth falls back to checking that AMQP answers and says what is missing |
+| **RabbitMQ** | through the management API: ready/unacked messages, publish and deliver rates, connections, consumers, memory vs limit, disk free, file descriptors, resource alarms, the queues with most messages. If the management port is closed, or it refuses the login, Berth falls back to checking that AMQP answers: the service stays *up*, a note explains what is missing, and a refused login raises one warning (not a down alert) |
 | **MySQL** | reachability and version, from the server greeting (no login needed) |
 | **HTTP / TCP** | status code and response time / connect time, for GopherPost, Gotenberg, the APIs, Traefik and others |
 
@@ -470,7 +471,8 @@ against real PostgreSQL, Redis, MongoDB and RabbitMQ.
   An alert opens once, is emailed once, and a "RESOLVED" email follows when it clears. An email
   that could not be sent is retried on later checks. Alerts always show on the Services page,
   even without email set up.
-- Passwords are stored encrypted like app secrets and are never shown again. Berth only reads;
+- Berth keeps its own pool to its database at 5 connections (the pgx default is one per CPU), because it shares the PostgreSQL server with the apps it manages. Each Postgres check opens one short-lived connection, named `berth-monitor` in `pg_stat_activity`.
+- Passwords are stored encrypted like app secrets and are never shown again. When you edit a service and leave the password empty, the saved one is kept, unless you changed the username, host or port: then Berth asks you to type the password again, because the saved one belongs to the old settings. Berth only reads;
   use read-only monitoring users.
 
 **Creating monitoring users** (Berth runs on the same host, so connect to `127.0.0.1`):
@@ -487,7 +489,7 @@ GRANT pg_monitor TO berth_monitor;
 sudo rabbitmq-plugins enable rabbitmq_management
 sudo rabbitmqctl add_user berth '...'
 sudo rabbitmqctl set_user_tags berth monitoring
-sudo rabbitmqctl set_permissions -p / berth '^$' '^$' '.*'   # read-only, if the queue table is empty
+sudo rabbitmqctl set_permissions -p / berth '^$' '^$' '^$'   # matches nothing: can list queues, cannot read or publish. Repeat per vhost
 ```
 
 MongoDB: a user with the `clusterMonitor` role. Redis: an ACL user limited to `+info +ping`, or no

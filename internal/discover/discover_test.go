@@ -145,3 +145,30 @@ func TestSlug(t *testing.T) {
 		}
 	}
 }
+
+func TestRenamedRepositoryMatchesByAlias(t *testing.T) {
+	root := t.TempDir()
+	gitFolder(t, root, "Kite360", "git@github.com:dominickasanga/proworkwave_erp.git", "main") // folder name differs, remote uses the old repo name
+	x := config.ExpectedApp{Name: "kite360-web", Repo: "https://github.com/dominickasanga/kite360", FolderNames: []string{"nope"},
+		RepoAliases: []string{"https://github.com/dominickasanga/proworkwave_erp"}}
+
+	found, _ := Scan([]string{root}, []config.ExpectedApp{x})
+	got := found["kite360-web"]
+	if len(got) != 1 || !got[0].RemoteMatch || got[0].Warning() != "" {
+		t.Fatalf("a folder using the old repo name should match through the alias: %+v", got)
+	}
+	// without the alias the same folder is not recognised (the folder name does not match either)
+	x.RepoAliases = nil
+	if found, _ := Scan([]string{root}, []config.ExpectedApp{x}); len(found["kite360-web"]) != 0 {
+		t.Fatalf("without the alias this folder should not match: %+v", found)
+	}
+	// ...and a folder whose name matches but whose remote is some other repository still warns
+	other := t.TempDir()
+	gitFolder(t, other, "kite360", "git@github.com:someone/else.git", "main")
+	x.FolderNames = []string{"kite360"}
+	x.RepoAliases = []string{"https://github.com/dominickasanga/proworkwave_erp"}
+	found, _ = Scan([]string{other}, []config.ExpectedApp{x})
+	if c := found["kite360-web"]; len(c) != 1 || c[0].RemoteMatch || c[0].Warning() == "" {
+		t.Fatalf("an unrelated remote must still be flagged: %+v", c)
+	}
+}

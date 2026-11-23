@@ -10,6 +10,8 @@ apps:
   - name: kite360-web
     title: Kite360 web
     repo: https://github.com/dominickasanga/kite360
+    repo_aliases:                        # the same repository under its old name (GitHub redirects it; both give the same commit)
+      - https://github.com/dominickasanga/proworkwave_erp
     branch: main
     subfolder: app/tams-nuxt
     compose_file: docker-compose.yml
@@ -25,6 +27,8 @@ apps:
   - name: kite360-api
     title: Kite360 API
     repo: https://github.com/dominickasanga/Kite360-API
+    repo_aliases:                        # the same repository under its old name
+      - https://github.com/dominickasanga/visionary_erp_api
     branch: main
     subfolder: go-api
     compose_file: docker-compose.yml

@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func collectPostgres(ctx context.Context, sp Spec, prev Prev, now time.Time) Result {
@@ -25,6 +27,10 @@ func collectPostgres(ctx context.Context, sp Spec, prev Prev, now time.Time) Res
 	start := time.Now()
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "28P01" { // invalid_password
+			return fail(fmt.Errorf("the server refused the password for user %q (%v). Check the role's password with psql, and re-enter it here: if you changed the username, the saved password belongs to the old one", sp.Username, pgErr.Message))
+		}
 		return fail(err)
 	}
 	defer conn.Close(ctx)
@@ -94,6 +100,29 @@ func collectPostgres(ctx context.Context, sp Spec, prev Prev, now time.Time) Res
 		if len(dbs.Rows) > 0 {
 			r.Tables = append(r.Tables, dbs)
 		}
+	}
+
+	// who holds the connections: grouped by application, with numbered names such as
+	// "pgAdmin 4 - CONN:4584859" collapsed into one line
+	apps := store.Table{Title: "Connections by application", Columns: []string{"Application", "Database", "User", "State", "Connections"}}
+	var idle, idleTx float64
+	if rows, err := conn.Query(ctx, `SELECT CASE WHEN application_name = '' THEN '(no name)' ELSE regexp_replace(application_name, '[0-9]{3,}', '#', 'g') END,
+		coalesce(datname, ''), coalesce(usename, ''), coalesce(state, 'unknown'), count(*)
+		FROM pg_stat_activity WHERE backend_type = 'client backend' GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC, 1 LIMIT 20`); err == nil {
+		for rows.Next() {
+			var app, db, user, state string
+			var n int
+			if rows.Scan(&app, &db, &user, &state, &n) == nil {
+				apps.Rows = append(apps.Rows, []string{app, db, user, state, strconv.Itoa(n)})
+			}
+		}
+		rows.Close()
+	}
+	conn.QueryRow(ctx, `SELECT count(*) FILTER (WHERE state = 'idle'), count(*) FILTER (WHERE state LIKE 'idle in transaction%')
+		FROM pg_stat_activity WHERE backend_type = 'client backend'`).Scan(&idle, &idleTx)
+	r.Metrics["connections_idle"], r.Metrics["idle_in_transaction"] = idle, idleTx
+	if len(apps.Rows) > 0 {
+		r.Tables = append(r.Tables, apps)
 	}
 
 	// long-running queries (query text is only visible with pg_monitor or superuser)

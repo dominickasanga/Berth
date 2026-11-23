@@ -971,3 +971,92 @@ func TestRequestLog(t *testing.T) {
 		t.Error("mode off must log nothing")
 	}
 }
+
+func TestChangedUsernameNeedsThePasswordAgain(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	srv.Sampler = &monitor.Sampler{Store: srv.Store, Box: srv.Box}
+	c := client()
+	do := func(path string, form url.Values) (int, string) {
+		req, _ := http.NewRequest("POST", ts.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	do("/services", url.Values{"name": {"pg"}, "kind": {"http"}, "p_url": {"http://127.0.0.1:1/x"}, "username": {"dom"}, "password": {"old-secret"}, "enabled": {"on"}})
+	list, _ := srv.Store.ListServices(context.Background())
+	id := strconv.FormatInt(list[0].ID, 10)
+	same := func() url.Values {
+		return url.Values{"id": {id}, "kind": {"http"}, "p_url": {"http://127.0.0.1:1/x"}, "username": {"dom"}, "enabled": {"on"}}
+	}
+
+	// unchanged settings and an empty password field keep the saved password
+	if code, _ := do("/services/"+id, same()); code != 303 {
+		t.Fatalf("an edit that changes nothing sensitive should save: %d", code)
+	}
+	// a new username with the password left empty must not silently reuse the old one
+	changed := same()
+	changed.Set("username", "berth_monitor")
+	if code, body := do("/services/"+id, changed); code != 400 || !strings.Contains(body, "type the password again") {
+		t.Fatalf("a changed username without a password must be refused: %d", code)
+	}
+	if after, _ := srv.Store.ServiceByID(context.Background(), list[0].ID); after.Username != "dom" {
+		t.Fatal("nothing should have been saved")
+	}
+	// the Test connection button follows the same rule
+	if _, frag := do("/services/test", changed); !strings.Contains(frag, "type the password again") {
+		t.Fatalf("testing a changed username with no password must say so: %s", frag)
+	}
+	// typing the password makes it work, and the new password is used
+	changed.Set("password", "new-secret")
+	if code, _ := do("/services/"+id, changed); code != 303 {
+		t.Fatalf("a changed username with a password should save: %d", code)
+	}
+	after, _ := srv.Store.ServiceByID(context.Background(), list[0].ID)
+	if plain, _ := srv.Box.Open(after.Password); after.Username != "berth_monitor" || plain != "new-secret" {
+		t.Fatalf("the new username and password should both be stored: %s %q", after.Username, plain)
+	}
+}
+
+func TestDiscoverOffersExistingFolderForRenamedRepo(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	srv.Expected = []config.ExpectedApp{{Name: "kite360-web", Title: "Kite360 web", Repo: "https://github.com/dominickasanga/kite360",
+		RepoAliases: []string{"https://github.com/dominickasanga/proworkwave_erp"}, Branch: "main", Subfolder: "app/tams-nuxt", ComposeFile: "docker-compose.yml", FolderNames: []string{"kite360"}}}
+	root := t.TempDir()
+	dir := filepath.Join(root, "Kite360")
+	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:dominickasanga/proworkwave_erp.git\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+
+	c := client()
+	do := func(method, path string, form url.Values) (int, string, string) {
+		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b), r.Header.Get("Location")
+	}
+	do("POST", "/discover/paths/delete", url.Values{"path": {"/var/www"}})
+	do("POST", "/discover/paths/delete", url.Values{"path": {"/mnt/blockvolume"}})
+	do("POST", "/discover/paths", url.Values{"path": {root}})
+
+	_, page, _ := do("GET", "/discover", nil)
+	if !strings.Contains(page, `value="existing"`) || strings.Contains(page, "different repository") || strings.Contains(page, "not the expected repository") {
+		t.Fatal("a folder using the repository's old name should be offered as the existing folder")
+	}
+	if _, _, loc := do("POST", "/discover/register", url.Values{"expected": {"kite360-web"}, "mode": {"existing"}}); !strings.HasPrefix(loc, "/apps/kite360-web") {
+		t.Fatalf("registering from the renamed-repo folder failed: %q", loc)
+	}
+	app, _ := srv.Store.AppByName(context.Background(), "kite360-web")
+	if app == nil || app.SourceMode != "existing" || app.SourcePath != dir || app.RepoURL != "git@github.com:dominickasanga/proworkwave_erp.git" {
+		t.Fatalf("the app should use the folder and the remote that already works there: %+v", app)
+	}
+}

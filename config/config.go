@@ -25,6 +25,9 @@ type ExpectedApp struct {
 	Monitor          bool     `yaml:"monitor"`
 	// ComposeProject adopts an existing compose project (containers and named volumes) in place.
 	ComposeProject string `yaml:"compose_project"`
+	// RepoAliases are other URLs of the same repository (for example its name before it was
+	// renamed on GitHub), so a folder whose git remote still uses the old name is recognised.
+	RepoAliases []string `yaml:"repo_aliases"`
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)

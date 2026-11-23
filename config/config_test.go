@@ -47,6 +47,32 @@ func TestExistingStacksAreAdoptedByProjectName(t *testing.T) {
 	}
 }
 
+func TestRenamedRepositoryIsAnAlias(t *testing.T) {
+	apps, _ := Expected()
+	for _, a := range apps {
+		if a.Name == "kite360-web" {
+			if len(a.RepoAliases) != 1 || a.RepoAliases[0] != "https://github.com/dominickasanga/proworkwave_erp" {
+				t.Fatalf("kite360-web should know its old repository name: %v", a.RepoAliases)
+			}
+			return
+		}
+	}
+	t.Fatal("kite360-web missing")
+}
+
+func TestKite360APIKnowsItsOldName(t *testing.T) {
+	apps, _ := Expected()
+	for _, a := range apps {
+		if a.Name == "kite360-api" {
+			if len(a.RepoAliases) != 1 || a.RepoAliases[0] != "https://github.com/dominickasanga/visionary_erp_api" {
+				t.Fatalf("kite360-api should know its old repository name: %v", a.RepoAliases)
+			}
+			return
+		}
+	}
+	t.Fatal("kite360-api missing")
+}
+
 func TestRejectsBadEntries(t *testing.T) {
 	for name, y := range map[string]string{
 		"no repo":     "apps:\n  - name: x\n",

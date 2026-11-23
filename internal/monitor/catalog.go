@@ -48,7 +48,7 @@ var kinds = map[string]KindDef{
 			{Key: "schema_sizes", Label: "List schema sizes (yes/no)", Default: "no", Help: "Lists schemas of the connected database with sizes (for example Kite360 tenants). Can be slow on large databases."},
 		},
 		Thresholds: []ThresholdDef{{"conn_pct", "Alert when connections used exceed", 85, "%"}, {"long_queries", "Alert at this many long-running queries", 3, ""}, {"waiting_locks", "Alert at this many waiting locks", 5, ""}},
-		Metrics: []MetricDef{{"connections_pct", "Connections used", "pct"}, {"connections", "Connections", "count"}, {"tps", "Transactions per second", "per_s"},
+		Metrics: []MetricDef{{"connections_pct", "Connections used", "pct"}, {"connections", "Connections", "count"}, {"connections_idle", "Idle connections", "count"}, {"idle_in_transaction", "Idle in transaction", "count"}, {"tps", "Transactions per second", "per_s"},
 			{"cache_hit_pct", "Cache hit ratio", "pct"}, {"db_size_bytes", "Total database size", "bytes"}, {"long_queries", "Long-running queries", "count"},
 			{"waiting_locks", "Waiting locks", "count"}, {"deadlocks_per_min", "Deadlocks per minute", "count"}},
 		Card: []string{"connections_pct", "cache_hit_pct", "tps", "db_size_bytes"},
@@ -76,7 +76,7 @@ var kinds = map[string]KindDef{
 	},
 	"rabbitmq": {
 		Kind: "rabbitmq", Label: "RabbitMQ", DefaultPort: 5672, HasCredentials: true, NeedsHost: true,
-		CredentialsHelp: "Needs a user tagged 'monitoring' for the management API. Without the management plugin Berth can only check that AMQP answers.",
+		CredentialsHelp: "Needs a user tagged 'monitoring' for the management API, plus an empty permission on each virtual host to list queues: rabbitmqctl set_permissions -p / <user> '^$' '^$' '^$' (matches nothing, so it cannot read or publish). Without the management plugin Berth can only check that AMQP answers.",
 		Params: []ParamDef{
 			{Key: "mgmt_port", Label: "Management API port", Default: "15672", Help: "Enable it with: rabbitmq-plugins enable rabbitmq_management"},
 			{Key: "mgmt_tls", Label: "Management API over HTTPS (yes/no)", Default: "no"},

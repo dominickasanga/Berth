@@ -58,6 +58,24 @@ func TestRealPostgres(t *testing.T) {
 	if p := second.Metrics["cache_hit_pct"]; p < 0 || p > 100 {
 		t.Fatalf("cache hit ratio out of range: %v", p)
 	}
+	// who holds the connections, grouped by application; Berth's own check is one of them
+	var byApp []string
+	for _, tb := range first.Tables {
+		if tb.Title == "Connections by application" {
+			for _, row := range tb.Rows {
+				byApp = append(byApp, row[0])
+			}
+		}
+	}
+	if len(byApp) == 0 || !strings.Contains(strings.Join(byApp, ","), "berth-monitor") {
+		t.Fatalf("expected a by-application table that includes berth-monitor: %v", byApp)
+	}
+	if _, ok := first.Metrics["connections_idle"]; !ok {
+		t.Fatal("idle connections should be a metric")
+	}
+	if _, ok := first.Metrics["idle_in_transaction"]; !ok {
+		t.Fatal("idle-in-transaction connections should be a metric")
+	}
 	// schema sizes are opt-in
 	sp.Params = map[string]string{"schema_sizes": "yes"}
 	withSchemas := run(t, sp, Prev{})
@@ -204,10 +222,14 @@ func TestRealRabbitMQ(t *testing.T) {
 	if len(r.Tables) == 0 || len(r.Tables[0].Rows) == 0 {
 		t.Fatalf("expected a queues table: %+v", r.Tables)
 	}
-	// wrong password: refused, reported as down with a useful message
+	// wrong password: the broker is up (AMQP answers), the monitoring login is what is wrong
 	sp.Password = "nope"
-	if bad := run(t, sp, Prev{}); bad.Up || !strings.Contains(bad.Err, "refused") {
-		t.Fatalf("wrong credentials must be down: %+v", bad)
+	bad := run(t, sp, Prev{})
+	if !bad.Up || bad.Info["mgmt_auth"] != "refused" || !strings.Contains(bad.Info["note"], "refused") {
+		t.Fatalf("a refused login must not look like an outage: %+v", bad)
+	}
+	if got := Conditions("rabbitmq", nil, bad, 0); len(got) != 1 || got[0].Key != "monitoring" || got[0].Severity != "warning" {
+		t.Fatalf("a refused login should raise one warning, not a down alert: %+v", got)
 	}
 	// no management API: AMQP still answers, so it is up but says what is missing
 	sp.Password = "guest"
@@ -315,5 +337,44 @@ func TestRateAndDelta(t *testing.T) {
 	}
 	if d, ok := delta(prev, map[string]float64{"x": 130}, "x"); !ok || d != 30 {
 		t.Errorf("delta = %v %v", d, ok)
+	}
+}
+
+// A monitoring user needs the 'monitoring' tag, and listing queues needs a permission entry on the
+// vhost. An entry whose patterns match nothing is enough, and gives no way to read or publish.
+func TestRabbitMonitoringUserPermissions(t *testing.T) {
+	reachable(t, 15672)
+	api := func(method, path, body string) int {
+		req, _ := http.NewRequest(method, "http://127.0.0.1:15672"+path, strings.NewReader(body))
+		req.SetBasicAuth("guest", "guest")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Skipf("management API not usable as guest: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := api("PUT", "/api/users/berthtest", `{"password":"tmp-pw-123","tags":"monitoring"}`); code != 201 && code != 204 {
+		t.Skipf("cannot create a test user: HTTP %d", code)
+	}
+	defer api("DELETE", "/api/users/berthtest", "")
+	sp := spec("rabbitmq", 5672, nil)
+	sp.Username, sp.Password = "berthtest", "tmp-pw-123"
+
+	r := run(t, sp, Prev{})
+	if !r.Up || r.Metrics["connections"] < 0 {
+		t.Fatalf("totals and node health need only the tag: %+v", r)
+	}
+	if r.Info["queues"] != "0" && len(r.Tables) == 0 && !strings.Contains(r.Info["note"], "cannot be listed") {
+		t.Fatalf("an empty queue list must be explained: %+v", r.Info)
+	}
+	api("PUT", "/api/permissions/%2F/berthtest", `{"configure":"^$","write":"^$","read":"^$"}`)
+	r = run(t, sp, Prev{})
+	if r.Info["queues"] != "0" && (len(r.Tables) == 0 || len(r.Tables[0].Rows) == 0) {
+		t.Fatalf("a match-nothing permission should be enough to list queues: %+v", r)
+	}
+	if r.Info["note"] != "" && strings.Contains(r.Info["note"], "cannot be listed") {
+		t.Fatalf("no warning once the queues are listed: %s", r.Info["note"])
 	}
 }

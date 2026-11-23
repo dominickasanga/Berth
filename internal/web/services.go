@@ -226,6 +226,15 @@ func (s *Server) serviceCreate(w http.ResponseWriter, r *http.Request, a *store.
 	s.redirect(w, r, "/services/"+strconv.FormatInt(id, 10)+"?msg="+url.QueryEscape("added; the first check is running"))
 }
 
+// savedPasswordStale says the saved password cannot be reused: it belongs to a different
+// username, host or port than the ones now in the form.
+func savedPasswordStale(saved *store.Service, f serviceForm) bool {
+	port, _ := strconv.Atoi(f.Port)
+	return saved.Username != f.Username || saved.Host != f.Host || saved.Port != port
+}
+
+const stalePasswordMsg = "You changed the username, host or port, so type the password again: the saved password belongs to the old settings."
+
 func (s *Server) loadService(w http.ResponseWriter, r *http.Request) *store.Service {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	v, err := s.Store.ServiceByID(r.Context(), id)
@@ -263,6 +272,11 @@ func (s *Server) serviceUpdate(w http.ResponseWriter, r *http.Request, a *store.
 	if msg != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		s.formPage(w, a, f, msg)
+		return
+	}
+	if pw == "" && r.FormValue("clear_password") != "on" && len(v.Password) > 0 && savedPasswordStale(v, f) {
+		w.WriteHeader(http.StatusBadRequest)
+		s.formPage(w, a, f, stalePasswordMsg)
 		return
 	}
 	port, _ := strconv.Atoi(f.Port)
@@ -316,6 +330,10 @@ func (s *Server) serviceTest(w http.ResponseWriter, r *http.Request, a *store.Ad
 	}
 	if id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64); id > 0 && pw == "" { // editing: use the saved password
 		if saved, _ := s.Store.ServiceByID(r.Context(), id); saved != nil && len(saved.Password) > 0 {
+			if savedPasswordStale(saved, f) {
+				s.render(w, "fragments", frag{"svc-test", map[string]any{"Problem": stalePasswordMsg}})
+				return
+			}
 			if plain, err := s.Box.Open(saved.Password); err == nil {
 				pw = plain
 			}

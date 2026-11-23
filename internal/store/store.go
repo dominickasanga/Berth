@@ -20,10 +20,20 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
+// maxPoolConns caps Berth's own connections to its database.
+const maxPoolConns = 5
+
 type Store struct{ Pool *pgxpool.Pool }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	// Berth is low traffic and shares its PostgreSQL server with the apps it manages, which may
+	// be close to max_connections: keep its own pool small (the default is one per CPU).
+	cfg.MaxConns = maxPoolConns
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

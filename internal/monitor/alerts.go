@@ -52,6 +52,9 @@ func Conditions(kind string, params map[string]string, r Result, failures int) [
 			add("connections", "warning", "%.0f%% of the available connections are in use (threshold %.0f%%)", m["connections_pct"], t)
 		}
 	case "rabbitmq":
+		if r.Info["mgmt_auth"] == "refused" {
+			add("monitoring", "warning", "the management API refused the login, so queue and memory metrics are missing (RabbitMQ itself answers)")
+		}
 		if m["alarms"] >= 1 {
 			add("alarm", "critical", "a memory or disk alarm is active: RabbitMQ is blocking publishers")
 		}

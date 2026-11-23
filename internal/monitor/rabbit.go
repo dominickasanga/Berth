@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +17,9 @@ import (
 )
 
 var rabbitClient = &http.Client{Timeout: 8 * time.Second}
+
+// errRefused means the management API answered but did not accept the login.
+var errRefused = errors.New("the management API refused the user (it needs the 'monitoring' tag, and a correct password)")
 
 func rabbitGet(ctx context.Context, base *url.URL, sp Spec, path string, out any) error {
 	u := *base
@@ -31,7 +35,7 @@ func rabbitGet(ctx context.Context, base *url.URL, sp Spec, path string, out any
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("the management API refused the user (needs the 'monitoring' tag)")
+		return errRefused
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("management API returned %s", resp.Status)
@@ -104,6 +108,19 @@ func collectRabbit(ctx context.Context, sp Spec, prev Prev, now time.Time) Resul
 	var overview map[string]any
 	start := time.Now()
 	if err := rabbitGet(ctx, base, sp, "/api/overview", &overview); err != nil {
+		if errors.Is(err, errRefused) {
+			// The broker is running; it is this monitoring login that is wrong. That is a setup problem,
+			// not an outage, so the service stays up and a warning explains what to fix.
+			if amqpErr != nil {
+				return fail(fmt.Errorf("AMQP does not answer (%v) and the management API refused the user", amqpErr))
+			}
+			r := newResult()
+			r.Up = true
+			r.Metrics["latency_ms"] = millis(amqpLat)
+			r.Info["mgmt_auth"] = "refused"
+			r.Info["note"] = "AMQP answers, but the management API refused this username and password, so queue and memory metrics are missing. Check the user, its password and its 'monitoring' tag."
+			return r
+		}
 		if amqpErr == nil && strings.Contains(err.Error(), "connection refused") { // plugin not enabled
 			r := newResult()
 			r.Up = true
@@ -177,6 +194,9 @@ func collectRabbit(ctx context.Context, sp Spec, prev Prev, now time.Time) Resul
 		}
 		if len(t.Rows) > 0 {
 			r.Tables = append(r.Tables, t)
+		} else if jnum(ot["queues"]) > 0 {
+			// the totals work with the monitoring tag alone, but listing queues needs a permission entry on the vhost
+			r.Info["note"] = "queues exist but cannot be listed: give this user a permission entry on each virtual host, e.g. rabbitmqctl set_permissions -p / <user> '^$' '^$' '^$' (matches nothing, so it cannot read or publish)"
 		}
 	}
 	return r

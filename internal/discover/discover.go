@@ -85,7 +85,13 @@ func matches(x config.ExpectedApp, folder, remote string) (nameMatch, remoteMatc
 	for _, n := range x.FolderNames {
 		nameMatch = nameMatch || strings.EqualFold(folder, n)
 	}
-	remoteMatch = remote != "" && Normalize(remote) == Normalize(x.Repo)
+	if remote != "" {
+		n := Normalize(remote)
+		remoteMatch = n == Normalize(x.Repo)
+		for _, alias := range x.RepoAliases {
+			remoteMatch = remoteMatch || n == Normalize(alias)
+		}
+	}
 	return
 }
 
