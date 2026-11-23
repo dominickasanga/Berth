@@ -4,7 +4,7 @@
 
 > **Status:** milestones 1 and 2 built (login with 2FA, app registry, env/secrets,
 > git deploy via compose, pre-deploy step, start/stop/restart, status, live
-> container logs, rollback, discovery of expected apps on disk). Not built yet: metrics and alerts, the managed
+> container logs, rollback, discovery of expected apps on disk, choice of existing folder or own clone). Not built yet: metrics and alerts, the managed
 > services (Postgres/Mongo/Redis/Docker), Kite360-specific actions. Not yet run
 > against the real Kite360 repos or a real server. This file is the source
 > of truth for the next developer or AI agent picking this up. Read it fully before
@@ -225,6 +225,11 @@ How a deploy treats the app's compose file:
   `up --no-build`. If an image was pruned the button is hidden, and a failed
   rollback changes nothing. The pre-deploy step is **not** run on rollback, so
   database migrations are not undone.
+- **Start / Stop / Restart** act on containers that already exist and never build or
+  pull. The status box shows the state (not deployed, running, stopped) and enables
+  only the buttons that can work: Start when stopped, Stop and Restart when running.
+  Nothing is built until the first Deploy. A failed action shows its full output on
+  the page and in Berth's own log.
 - **Logs:** "Show live logs" streams `compose logs -f` (last 200 lines, all
   services) over server-sent events. A reverse proxy must not buffer it.
 
@@ -254,15 +259,33 @@ and `.git/HEAD`; it never runs anything in them.
   equal) **and** by folder name (the entry's `name` or its `folder_names`). A folder
   whose name matches but whose remote is a different repo is shown with a warning.
 - **Two copies** (for example one under `/var/www`, one under `/mnt/blockvolume`):
-  the page lists both and blocks "Register" until you flag one with "Use this copy".
-  The flag is stored, and asked again if the flagged folder disappears.
-- **Register** creates the app from the YAML entry. If the discovered remote matches
-  the expected repo, Berth uses that remote and its current branch, since that form
-  already works on that server. Credentials in a remote URL are stripped and never
-  stored or shown.
-- **Berth deploys from its own clone** under `BERTH_DATA_DIR/checkouts`. The
-  discovered folder is recorded as `source_path` for reference and is never modified,
-  because a live folder can hold uncommitted changes that `git reset --hard` would
-  destroy.
+  the page lists both and you flag one with "Use this copy" before it can be used as
+  the existing folder. The flag is stored, and asked again if the flagged folder
+  disappears.
+- **You choose how to run each app** when registering (no default, you must pick):
+  - **Use the existing folder.** Berth runs the app from that folder. Offered only
+    when the folder is a git checkout of the expected repository, on a branch. A
+    deploy runs `git fetch` and `git merge --ff-only`, nothing else: it never
+    resets, cleans, force-checks-out or switches branches, so local changes survive.
+    If tracked files have local edits that upstream also changes, or the branch has
+    diverged, the deploy fails with git's message and changes nothing. People can
+    edit the `.env` next to the compose file by hand; Berth passes it to compose,
+    then variables saved in Berth, which win on conflict. Rollback restores the
+    kept images only and never checks out an old commit in that folder.
+  - **Clone a new copy.** Berth keeps its own clone under `BERTH_DATA_DIR/checkouts`
+    and may reset it on each deploy; variables are managed in Berth. An existing
+    folder is only remembered as `source_path` for reference and is not touched.
+- Credentials in a remote URL are stripped and never stored or shown. With "existing
+  folder", the repo URL and branch come from the folder itself.
+- git refuses folders owned by another user ("dubious ownership"). If Berth runs as
+  a different user than the folder's owner, run `git config --global --add
+  safe.directory <folder>` as the user Berth runs as.
+- **Switching an already-registered app** between the two modes: on the app's page
+  open "Change how it runs" (the Apps list and the page show the current mode as a
+  badge). "Existing folder" is offered only when a matching git folder is found
+  (for apps in `expected-apps.yaml`, by scanning; for apps added by hand, only if a
+  folder was recorded). The change takes effect on the next deploy, is refused while
+  a deploy is running, and never deletes the old clone or touches the folder. After
+  switching to a clone, Start/Stop/Logs may not work until you Deploy once.
 - **monitor** is recorded on the app and shown on its page. It does nothing until
   the metrics milestone is built.

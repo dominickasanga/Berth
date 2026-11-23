@@ -4,7 +4,9 @@ package web
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
@@ -60,22 +62,29 @@ func (s *Server) Handler() (http.Handler, error) {
 	s.fails = map[string]*failState{}
 	s.dummyHash, _ = bcrypt.GenerateFromPassword([]byte("berth"), bcrypt.DefaultCost)
 	s.tpl = map[string]*template.Template{}
+	static, _ := fs.Sub(staticFS, "static")
+	ver := staticVersion(static)
+	funcs := template.FuncMap{
+		"v": func() string { return ver },
+		"icon": func(name string) template.HTML { // one icon from the cached sprite
+			return template.HTML(`<svg class="i" aria-hidden="true" focusable="false"><use href="/static/icons.svg?v=` + ver + `#` + name + `"/></svg>`)
+		},
+	}
 	for _, page := range []string{"login", "apps", "app_new", "app", "discover"} {
-		t, err := template.New("").ParseFS(tplFS, "templates/layout.html", "templates/"+page+".html")
+		t, err := template.New("").Funcs(funcs).ParseFS(tplFS, "templates/layout.html", "templates/"+page+".html")
 		if err != nil {
 			return nil, err
 		}
 		s.tpl[page] = t
 	}
-	frag, err := template.New("").ParseFS(tplFS, "templates/fragments.html")
+	frag, err := template.New("").Funcs(funcs).ParseFS(tplFS, "templates/fragments.html")
 	if err != nil {
 		return nil, err
 	}
 	s.tpl["fragments"] = frag
 
-	static, _ := fs.Sub(staticFS, "static")
 	mux := http.NewServeMux()
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
+	mux.Handle("GET /static/", cacheStatic(http.StripPrefix("/static/", http.FileServer(http.FS(static)))))
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
@@ -92,11 +101,38 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /apps/{name}/deploy", s.auth(s.appDeploy))
 	mux.HandleFunc("POST /apps/{name}/control", s.auth(s.appControl))
 	mux.HandleFunc("POST /apps/{name}/rollback", s.auth(s.appRollback))
+	mux.HandleFunc("POST /apps/{name}/source", s.auth(s.appSource))
 	mux.HandleFunc("GET /apps/{name}/logs/stream", s.auth(s.logStream))
 	mux.HandleFunc("POST /apps/{name}/env", s.auth(s.envSet))
 	mux.HandleFunc("POST /apps/{name}/env/delete", s.auth(s.envDelete))
 	mux.HandleFunc("GET /deploys/{id}/log", s.auth(s.deployLog))
 	return s.sameOrigin(secureHeaders(mux)), nil
+}
+
+// staticVersion hashes the embedded static files; pages link them as ?v=<hash>.
+func staticVersion(static fs.FS) string {
+	h := sha256.New()
+	fs.WalkDir(static, ".", func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			b, _ := fs.ReadFile(static, path)
+			h.Write([]byte(path))
+			h.Write(b)
+		}
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))[:10]
+}
+
+// cacheStatic lets browsers keep versioned files for a year (the URL changes when the file does).
+func cacheStatic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("v") != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func secureHeaders(next http.Handler) http.Handler {
@@ -335,7 +371,7 @@ func (s *Server) appPage(w http.ResponseWriter, r *http.Request, a *store.Admin)
 		}
 		deploys = append(deploys, row)
 	}
-	s.render(w, "app", map[string]any{"User": a.Username, "App": app, "Env": rows, "Deploys": deploys, "Flash": r.URL.Query().Get("msg")})
+	s.render(w, "app", map[string]any{"User": a.Username, "App": app, "Env": rows, "Deploys": deploys, "Src": s.sourceOptions(r.Context(), *app), "Flash": r.URL.Query().Get("msg"), "Err": r.URL.Query().Get("err")})
 }
 
 func (s *Server) appStatus(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -343,12 +379,22 @@ func (s *Server) appStatus(w http.ResponseWriter, r *http.Request, a *store.Admi
 	if app == nil {
 		return
 	}
-	out, err := s.Deploy.Status(*app)
-	data := map[string]any{"Out": out}
+	svcs, err := s.Deploy.Services(*app)
+	state := deploy.Summarize(svcs)
+	data := map[string]any{"AppName": app.Name, "Services": svcs, "State": state,
+		"CanStart": state == "stopped", "CanStop": state == "running", "CanRestart": state == "running"}
 	if err != nil {
 		data["Err"] = err.Error()
+		data["CanStart"], data["CanStop"], data["CanRestart"] = false, false, false
 	}
-	s.render(w, "fragments", frag{"status", data})
+	if last, _ := s.Store.LatestDeploys(r.Context(), app.ID, 1); len(last) == 1 {
+		data["Last"] = last[0]
+	}
+	name := "status"
+	if r.URL.Query().Get("view") == "compact" {
+		name = "status-compact"
+	}
+	s.render(w, "fragments", frag{name, data})
 }
 
 func (s *Server) appDeploy(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -377,11 +423,16 @@ func (s *Server) appControl(w http.ResponseWriter, r *http.Request, a *store.Adm
 	action := r.FormValue("action")
 	out, err := s.Deploy.Control(*app, action)
 	s.Store.Audit(r.Context(), a.Username, "app."+action, app.Name)
-	msg := action + " ok"
 	if err != nil {
-		msg = action + " failed: " + strings.TrimSpace(out)
+		detail := strings.TrimSpace(out)
+		log.Printf("%s %s failed: %v\n%s", action, app.Name, err, detail)
+		if len(detail) > 1500 {
+			detail = "…" + detail[len(detail)-1500:]
+		}
+		http.Redirect(w, r, "/apps/"+app.Name+"?err="+url.QueryEscape(action+" failed ("+err.Error()+"):\n"+detail), http.StatusSeeOther)
+		return
 	}
-	http.Redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
+	http.Redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape(action+" ok"), http.StatusSeeOther)
 }
 
 func (s *Server) envSet(w http.ResponseWriter, r *http.Request, a *store.Admin) {
@@ -482,6 +533,24 @@ type discoverRow struct {
 	Chosen      string // path of the copy that will be used
 	NeedsChoice bool
 	Registered  bool
+	// "Use the existing folder" is offered only for a folder that is the expected repo on a branch.
+	CanUseExisting bool
+	ExistingWhy    string // why it is not offered
+}
+
+// existingOK says whether Berth can safely run an app straight from this discovered folder.
+func existingOK(c *discover.Candidate) (bool, string) {
+	switch {
+	case c == nil:
+		return false, "no copy was found on this server"
+	case !c.HasGit:
+		return false, "the folder is not a git checkout"
+	case !c.RemoteMatch:
+		return false, "the folder's git remote is not the expected repository"
+	case c.Branch == "":
+		return false, "the folder is not on a branch (detached HEAD)"
+	}
+	return true, ""
 }
 
 func (s *Server) scan(ctx context.Context) (paths []string, found map[string][]discover.Candidate, notes []discover.PathNote, err error) {
@@ -510,6 +579,10 @@ func (s *Server) discoverPage(w http.ResponseWriter, r *http.Request, a *store.A
 		row := discoverRow{App: x, Copies: found[x.Name], NeedsChoice: need, Registered: registered[x.Name]}
 		if c != nil {
 			row.Chosen = c.Path
+		}
+		row.CanUseExisting, row.ExistingWhy = existingOK(c)
+		if need {
+			row.ExistingWhy = "flag which copy to use first"
 		}
 		rows = append(rows, row)
 	}
@@ -588,20 +661,31 @@ func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *sto
 		http.Error(w, "server error", 500)
 		return
 	}
-	c, need := discover.Resolve(found[x.Name], choices[x.Name])
-	if need {
-		discoverRedirect(w, r, "err", x.Title+" was found in more than one place. Flag the copy to use first.")
+	mode := r.FormValue("mode")
+	if mode != "existing" && mode != "clone" {
+		discoverRedirect(w, r, "err", "Choose how to run "+x.Title+": use the existing folder, or clone a new copy.")
 		return
 	}
 	app := store.App{Name: x.Name, RepoURL: x.Repo, Branch: x.Branch, Subfolder: x.Subfolder,
-		ComposeFile: x.ComposeFile, PredeploySvc: x.PredeployService, Monitor: x.Monitor}
-	if c != nil {
+		ComposeFile: x.ComposeFile, PredeploySvc: x.PredeployService, Monitor: x.Monitor, SourceMode: mode}
+	c, need := discover.Resolve(found[x.Name], choices[x.Name])
+	if mode == "existing" {
+		if need {
+			discoverRedirect(w, r, "err", x.Title+" was found in more than one place. Flag the copy to use first.")
+			return
+		}
+		if ok, why := existingOK(c); !ok {
+			discoverRedirect(w, r, "err", "Cannot use the existing folder: "+why+". Clone a new copy instead.")
+			return
+		}
+		app.SourcePath, app.RepoURL, app.Branch = c.Path, c.Remote, c.Branch // the folder is the source of truth
+	} else if c != nil { // clone: Berth makes its own copy; the folder is only remembered for reference
 		app.SourcePath = c.Path
 		if c.RemoteMatch { // the remote already works on this server (e.g. its SSH form)
 			app.RepoURL = c.Remote
-		}
-		if c.RemoteMatch && c.Branch != "" && !strings.HasPrefix(c.Branch, "-") {
-			app.Branch = c.Branch
+			if c.Branch != "" && !strings.HasPrefix(c.Branch, "-") {
+				app.Branch = c.Branch
+			}
 		}
 	}
 	err = deploy.ValidateApp(app)
@@ -614,4 +698,96 @@ func (s *Server) discoverRegister(w http.ResponseWriter, r *http.Request, a *sto
 	}
 	s.Store.Audit(r.Context(), a.Username, "app.create", app.Name+" (discovered)")
 	http.Redirect(w, r, "/apps/"+app.Name+"?msg="+url.QueryEscape("registered from discovery"), http.StatusSeeOther)
+}
+
+// existingCandidate finds the on-disk folder an app could run from, and says why not if none fits.
+func (s *Server) existingCandidate(ctx context.Context, app store.App) (*discover.Candidate, string) {
+	if x := s.expectedByName(app.Name); x != nil {
+		paths, err := s.Store.ListScanPaths(ctx)
+		choices, err2 := s.Store.Choices(ctx)
+		if err != nil || err2 != nil {
+			return nil, "could not read the scan settings"
+		}
+		found, _ := discover.Scan(paths, []config.ExpectedApp{*x})
+		c, need := discover.Resolve(found[x.Name], choices[x.Name])
+		if need {
+			return nil, "it was found in more than one place; flag one copy on the Discover page first"
+		}
+		if ok, why := existingOK(c); !ok {
+			return nil, why
+		}
+		return c, ""
+	}
+	if app.SourcePath == "" {
+		return nil, "this app was added by hand and no existing folder is known for it"
+	}
+	c := discover.Inspect(app.SourcePath, app.RepoURL)
+	if ok, why := existingOK(&c); !ok {
+		return nil, why
+	}
+	return &c, ""
+}
+
+type sourceOptions struct {
+	CanUseExisting bool
+	Path, Why      string
+}
+
+func (s *Server) sourceOptions(ctx context.Context, app store.App) sourceOptions {
+	c, why := s.existingCandidate(ctx, app)
+	if c == nil {
+		return sourceOptions{Why: why}
+	}
+	return sourceOptions{CanUseExisting: true, Path: c.Path}
+}
+
+// appSource switches an already-registered app between its own clone and an existing folder.
+func (s *Server) appSource(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	app := s.loadApp(w, r)
+	if app == nil {
+		return
+	}
+	back := func(key, msg string) {
+		http.Redirect(w, r, "/apps/"+app.Name+"?"+key+"="+url.QueryEscape(msg), http.StatusSeeOther)
+	}
+	mode := r.FormValue("mode")
+	if mode != "existing" && mode != "clone" {
+		back("err", "Choose how to run this app: use the existing folder, or a Berth clone.")
+		return
+	}
+	if mode == app.SourceMode {
+		back("msg", "Already running that way; nothing changed.")
+		return
+	}
+	updated := *app
+	updated.SourceMode = mode
+	if mode == "existing" {
+		c, why := s.existingCandidate(r.Context(), *app)
+		if c == nil {
+			back("err", "Cannot use the existing folder: "+why+".")
+			return
+		}
+		updated.SourcePath, updated.RepoURL, updated.Branch = c.Path, c.Remote, c.Branch
+	}
+	if err := deploy.ValidateApp(updated); err != nil {
+		back("err", "Cannot switch: "+err.Error())
+		return
+	}
+	err := s.Deploy.Idle(app.ID, func() error {
+		return s.Store.UpdateAppSource(r.Context(), app.ID, mode, updated.SourcePath, updated.RepoURL, updated.Branch)
+	})
+	if errors.Is(err, deploy.ErrBusy) {
+		back("err", "A deploy is running for this app. Try again when it has finished.")
+		return
+	}
+	if err != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	s.Store.Audit(r.Context(), a.Username, "app.source", app.Name+" -> "+mode)
+	msg := "Now running from the existing folder. Deploy to apply it."
+	if mode == "clone" {
+		msg = "Now using a Berth-managed clone. Deploy to create it; until then Start, Stop and Logs may not work."
+	}
+	back("msg", msg)
 }

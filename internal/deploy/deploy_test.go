@@ -53,3 +53,22 @@ func TestSplitRef(t *testing.T) {
 		}
 	}
 }
+
+func TestSummarizeAndParse(t *testing.T) {
+	if got := Summarize(nil); got != "none" {
+		t.Errorf("no containers => none, got %s", got)
+	}
+	web := ServiceState{"web", "running", "healthy", "Up 2s"}
+	migrate := ServiceState{"migrate", "exited", "", "Exited (0) 5s ago"}
+	if got := Summarize([]ServiceState{migrate, web}); got != "running" {
+		t.Errorf("one running => running, got %s", got)
+	}
+	web.State = "exited"
+	if got := Summarize([]ServiceState{migrate, web}); got != "stopped" {
+		t.Errorf("none running => stopped, got %s", got)
+	}
+	got := parseServices("web\trunning\thealthy\tUp 2 seconds (healthy)\nmigrate\texited\t\tExited (0) 5s ago")
+	if len(got) != 2 || got[0].Service != "web" || got[0].Health != "healthy" || got[1].State != "exited" {
+		t.Errorf("parse wrong: %+v", got)
+	}
+}

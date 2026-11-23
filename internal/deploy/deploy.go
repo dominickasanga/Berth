@@ -72,10 +72,23 @@ func ValidateApp(a store.App) error {
 	if a.PredeploySvc != "" && !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(a.PredeploySvc) {
 		return fmt.Errorf("%w: pre-deploy service", ErrBadInput)
 	}
+	switch a.SourceMode {
+	case "", "clone":
+	case "existing":
+		if !filepath.IsAbs(a.SourcePath) || filepath.Clean(a.SourcePath) != a.SourcePath {
+			return fmt.Errorf("%w: the existing folder must be a clean absolute path", ErrBadInput)
+		}
+	default:
+		return fmt.Errorf("%w: source mode", ErrBadInput)
+	}
 	return nil
 }
 
+// checkoutDir is the app's own clone, or the user's existing folder in "existing" mode.
 func (e *Engine) checkoutDir(a store.App) string {
+	if a.SourceMode == "existing" {
+		return a.SourcePath
+	}
 	return filepath.Join(e.DataDir, "checkouts", a.Name)
 }
 func (e *Engine) envFile(a store.App) string { return filepath.Join(e.DataDir, "env", a.Name+".env") }
@@ -86,10 +99,7 @@ func (e *Engine) compose(a store.App, args ...string) *exec.Cmd {
 
 func (e *Engine) composeCtx(ctx context.Context, a store.App, args ...string) *exec.Cmd {
 	dir := filepath.Join(e.checkoutDir(a), a.Subfolder)
-	base := []string{"-p", "berth-" + a.Name, "-f", filepath.Join(dir, a.ComposeFile)}
-	if _, err := os.Stat(e.envFile(a)); err == nil {
-		base = append(base, "--env-file", e.envFile(a))
-	}
+	base := append([]string{"-p", "berth-" + a.Name, "-f", filepath.Join(dir, a.ComposeFile)}, e.envArgs(a, dir)...)
 	prefix := e.ComposeCmd
 	if len(prefix) == 0 {
 		prefix = []string{"docker", "compose"}
@@ -97,6 +107,48 @@ func (e *Engine) composeCtx(ctx context.Context, a store.App, args ...string) *e
 	cmd := exec.CommandContext(ctx, prefix[0], append(append(append([]string{}, prefix[1:]...), base...), args...)...)
 	cmd.Dir = dir
 	return cmd
+}
+
+// envArgs lists the --env-file flags. For an existing folder the folder's own .env comes first
+// (people edit it by hand) and variables saved in Berth, if any, come after and win.
+func (e *Engine) envArgs(a store.App, dir string) []string {
+	var args []string
+	if a.SourceMode == "existing" {
+		if _, err := os.Stat(filepath.Join(dir, ".env")); err == nil {
+			args = append(args, "--env-file", filepath.Join(dir, ".env"))
+		}
+		if fi, err := os.Stat(e.envFile(a)); err == nil && fi.Size() > 0 {
+			args = append(args, "--env-file", e.envFile(a))
+		}
+		return args
+	}
+	if _, err := os.Stat(e.envFile(a)); err == nil {
+		args = append(args, "--env-file", e.envFile(a))
+	}
+	return args
+}
+
+// updateExisting fast-forwards a folder that already exists on the server. It never resets,
+// cleans, force-checks-out or switches branches there, so hand edits (.env, local files) survive.
+func updateExisting(dir, branch string, exe func(*exec.Cmd) error, w io.Writer) error {
+	if fi, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !fi.IsDir() {
+		return fmt.Errorf("%s is not a git checkout", dir)
+	}
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return fmt.Errorf("cannot read the folder's current branch: %w", err)
+	}
+	if cur := strings.TrimSpace(string(out)); cur != branch {
+		return fmt.Errorf("the folder is on branch %q but this app uses %q; Berth never switches branches in your own folder", cur, branch)
+	}
+	fmt.Fprintln(w, "using the existing folder; updating with fast-forward only (nothing is reset or deleted)")
+	if err := exe(exec.Command("git", "-C", dir, "fetch", "--prune", "origin", branch)); err != nil {
+		return fmt.Errorf("git fetch: %w", err)
+	}
+	if err := exe(exec.Command("git", "-C", dir, "merge", "--ff-only", "origin/"+branch)); err != nil {
+		return fmt.Errorf("git merge --ff-only failed (local changes to tracked files or a diverged branch stop the update; nothing was changed): %w", err)
+	}
+	return nil
 }
 
 // WriteEnvFile decrypts the app's variables into DataDir/env/<app>.env (mode 0600).
@@ -125,6 +177,16 @@ func quoteEnv(v string) string {
 	}
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`)
 	return `"` + r.Replace(v) + `"`
+}
+
+// Idle runs fn only while no deploy or rollback of the app is running (ErrBusy otherwise).
+func (e *Engine) Idle(appID int64, fn func() error) error {
+	lk := e.lockFor(appID)
+	if !lk.TryLock() {
+		return ErrBusy
+	}
+	defer lk.Unlock()
+	return fn()
 }
 
 // Start begins a deploy in the background and returns the deploy id.
@@ -188,7 +250,11 @@ func (e *Engine) run(ctx context.Context, a store.App, w io.Writer, deployID int
 
 	step("git")
 	dir := e.checkoutDir(a)
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+	if a.SourceMode == "existing" {
+		if err := updateExisting(dir, a.Branch, exe, w); err != nil {
+			return "", err
+		}
+	} else if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 			return "", err
 		}
@@ -222,6 +288,9 @@ func (e *Engine) run(ctx context.Context, a store.App, w io.Writer, deployID int
 		return sha, err
 	}
 	fmt.Fprintln(w, "variables written outside the checkout (values not shown)")
+	if a.SourceMode == "existing" {
+		fmt.Fprintln(w, "the folder's own .env is used as it is; variables saved in Berth override it")
+	}
 
 	step("build")
 	if err := exe(e.compose(a, "build")); err != nil {
@@ -256,15 +325,20 @@ func (e *Engine) rollback(ctx context.Context, a store.App, t store.Deploy, w io
 		return cmd.Run()
 	}
 	dir := e.checkoutDir(a)
-	prev, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
-	defer func() { // a failed rollback must not leave the checkout on the old commit
-		if err != nil && shaRe.MatchString(strings.TrimSpace(string(prev))) {
-			exec.Command("git", "-C", dir, "checkout", "--force", strings.TrimSpace(string(prev))).Run()
-		}
-	}()
 	step(fmt.Sprintf("rolling back to deploy #%d (%.8s)", t.ID, t.CommitSHA))
-	if err := exe(exec.Command("git", "-C", dir, "checkout", "--force", t.CommitSHA)); err != nil {
-		return t.CommitSHA, fmt.Errorf("git checkout: %w", err)
+	if a.SourceMode == "existing" {
+		// Never check out an old commit in the user's own folder: the kept images carry the old code.
+		fmt.Fprintln(w, "existing folder: its files are left as they are; restoring the old images only")
+	} else {
+		prev, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+		defer func() { // a failed rollback must not leave the checkout on the old commit
+			if err != nil && shaRe.MatchString(strings.TrimSpace(string(prev))) {
+				exec.Command("git", "-C", dir, "checkout", "--force", strings.TrimSpace(string(prev))).Run()
+			}
+		}()
+		if err := exe(exec.Command("git", "-C", dir, "checkout", "--force", t.CommitSHA)); err != nil {
+			return t.CommitSHA, fmt.Errorf("git checkout: %w", err)
+		}
 	}
 	if err := e.WriteEnvFile(ctx, a); err != nil {
 		return t.CommitSHA, err
@@ -413,11 +487,51 @@ func (e *Engine) Status(a store.App) (string, error) {
 	go func() { out, err = cmd.CombinedOutput(); close(done) }()
 	select {
 	case <-done:
-		return strings.TrimSpace(string(out)), err
+		if err != nil { // keep docker's own message, e.g. "Cannot connect to the Docker daemon"
+			return "", fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		}
+		return strings.TrimSpace(string(out)), nil
 	case <-time.After(10 * time.Second):
 		cmd.Process.Kill()
 		return "", errors.New("docker did not answer in 10s")
 	}
+}
+
+// ServiceState is one container of the app's compose project.
+type ServiceState struct{ Service, State, Health, Status string }
+
+// Services lists the app's containers (empty if nothing was ever deployed).
+func (e *Engine) Services(a store.App) ([]ServiceState, error) {
+	out, err := e.Status(a)
+	if err != nil {
+		return nil, err
+	}
+	return parseServices(out), nil
+}
+
+func parseServices(out string) []ServiceState {
+	var list []ServiceState
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) == 4 {
+			list = append(list, ServiceState{f[0], f[1], f[2], f[3]})
+		}
+	}
+	return list
+}
+
+// Summarize reduces the containers to "none" (never deployed / nothing built),
+// "running" (at least one container is up) or "stopped" (built, none running).
+func Summarize(list []ServiceState) string {
+	if len(list) == 0 {
+		return "none"
+	}
+	for _, s := range list {
+		if s.State == "running" {
+			return "running"
+		}
+	}
+	return "stopped"
 }
 
 type logWriter struct {

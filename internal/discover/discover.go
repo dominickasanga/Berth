@@ -82,6 +82,13 @@ func Scan(paths []string, expected []config.ExpectedApp) (map[string][]Candidate
 	return found, notes
 }
 
+// Inspect describes one folder against an expected repository URL (for apps not in expected-apps.yaml).
+func Inspect(dir, repo string) Candidate {
+	remote, branch, hasGit := readGit(dir)
+	return Candidate{Path: dir, Folder: filepath.Base(dir), Remote: StripCredentials(remote), Branch: branch,
+		HasGit: hasGit, RemoteMatch: remote != "" && Normalize(remote) == Normalize(repo)}
+}
+
 // Resolve picks the copy to use: the user's flagged one if it is still found,
 // else the only copy. needsChoice is true when there are several and none is flagged.
 func Resolve(cands []Candidate, chosenPath string) (c *Candidate, needsChoice bool) {

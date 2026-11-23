@@ -145,7 +145,8 @@ func TestDiscoverTwoCopiesNeedAFlag(t *testing.T) {
 	ts, secret, srv, cookie := setupLoggedIn(t)
 	_ = secret
 	srv.Expected = []config.ExpectedApp{{Name: "kite360-api", Title: "Kite360 API", Repo: "https://github.com/dominickasanga/Kite360-API",
-		Branch: "main", Subfolder: "go-api", ComposeFile: "docker-compose.yml", PredeployService: "migrate", FolderNames: []string{"kite360-api"}, Monitor: true}}
+		Branch: "main", Subfolder: "go-api", ComposeFile: "docker-compose.yml", PredeployService: "migrate", FolderNames: []string{"kite360-api"}, Monitor: true},
+		{Name: "other-app", Title: "Other", Repo: "https://github.com/dominickasanga/Other", Branch: "main", ComposeFile: "docker-compose.yml", FolderNames: []string{"other-app"}}}
 
 	mk := func(parent, name, remote string) string {
 		dir := filepath.Join(parent, name)
@@ -157,6 +158,7 @@ func TestDiscoverTwoCopiesNeedAFlag(t *testing.T) {
 	varWww, blockvol := t.TempDir(), t.TempDir()
 	mk(varWww, "Kite360-API", "git@github.com:dominickasanga/Kite360-API.git")
 	second := mk(blockvol, "kite360-api", "https://tok:secret@github.com/dominickasanga/Kite360-API.git")
+	mk(varWww, "other-app", "https://github.com/someone/else.git") // name matches, remote does not
 
 	c := client()
 	do := func(method, path string, form url.Values) (int, string, string) {
@@ -192,9 +194,21 @@ func TestDiscoverTwoCopiesNeedAFlag(t *testing.T) {
 		t.Fatal("credentials from a git remote leaked into the page")
 	}
 
-	// registering is blocked until a copy is flagged
-	if _, _, loc := do("POST", "/discover/register", url.Values{"expected": {"kite360-api"}}); !strings.Contains(loc, "err=") {
-		t.Fatalf("register without a flag must be refused, got redirect %q", loc)
+	reg := func(expected, mode string) string {
+		form := url.Values{"expected": {expected}}
+		if mode != "" {
+			form.Set("mode", mode)
+		}
+		_, _, loc := do("POST", "/discover/register", form)
+		return loc
+	}
+	// the user has to choose: no mode is refused
+	if loc := reg("kite360-api", ""); !strings.Contains(loc, "err=") || !strings.Contains(loc, "Choose+how") {
+		t.Fatalf("register without choosing a mode must be refused, got %q", loc)
+	}
+	// "existing folder" is blocked while two copies exist and none is flagged
+	if loc := reg("kite360-api", "existing"); !strings.Contains(loc, "err=") || !strings.Contains(loc, "more+than+one+place") {
+		t.Fatalf("existing without a flag must be refused, got %q", loc)
 	}
 	// flagging a path that was not found is refused
 	if _, _, loc := do("POST", "/discover/choose", url.Values{"expected": {"kite360-api"}, "path": {"/etc"}}); !strings.Contains(loc, "err=") {
@@ -202,22 +216,89 @@ func TestDiscoverTwoCopiesNeedAFlag(t *testing.T) {
 	}
 	do("POST", "/discover/choose", url.Values{"expected": {"kite360-api"}, "path": {second}})
 	_, page, _ = do("GET", "/discover", nil)
-	if !strings.Contains(page, "Using this copy") {
-		t.Fatal("flagged copy should be marked")
+	if !strings.Contains(page, "Using this copy") || !strings.Contains(page, `value="existing"`) || !strings.Contains(page, `value="clone"`) {
+		t.Fatal("flagged copy should be marked and both run modes offered")
 	}
 
-	code, _, loc := do("POST", "/discover/register", url.Values{"expected": {"kite360-api"}})
-	if code != 303 || loc != "/apps/kite360-api?msg=registered+from+discovery" {
-		t.Fatalf("register failed: %d %s", code, loc)
+	// a folder whose name matches but whose git remote is a different repository cannot be used directly
+	if loc := reg("other-app", "existing"); !strings.Contains(loc, "err=") || !strings.Contains(loc, "not+the+expected+repository") {
+		t.Fatalf("existing with a wrong remote must be refused, got %q", loc)
+	}
+	// ...but a new clone is always possible
+	if loc := reg("other-app", "clone"); !strings.HasPrefix(loc, "/apps/other-app") {
+		t.Fatalf("clone should register, got %q", loc)
+	}
+	other, _ := srv.Store.AppByName(context.Background(), "other-app")
+	if other == nil || other.SourceMode != "clone" || other.RepoURL != "https://github.com/dominickasanga/Other" || other.Branch != "main" {
+		t.Fatalf("clone app should use the expected repo, got %+v", other)
+	}
+
+	// use the existing folder
+	if loc := reg("kite360-api", "existing"); loc != "/apps/kite360-api?msg=registered+from+discovery" {
+		t.Fatalf("register failed: %s", loc)
 	}
 	app, _ := srv.Store.AppByName(context.Background(), "kite360-api")
-	if app == nil || !app.Monitor || app.SourcePath != second || app.PredeploySvc != "migrate" || app.Subfolder != "go-api" {
+	if app == nil || app.SourceMode != "existing" || !app.Monitor || app.SourcePath != second || app.PredeploySvc != "migrate" || app.Subfolder != "go-api" {
 		t.Fatalf("app not registered as expected: %+v", app)
 	}
 	if strings.Contains(app.RepoURL, "secret") || strings.Contains(app.RepoURL, "tok") {
 		t.Fatalf("credentials were stored in the database: %s", app.RepoURL)
 	}
 	if app.Branch != "release" {
-		t.Fatalf("branch should come from the flagged copy, got %s", app.Branch)
+		t.Fatalf("branch should come from the existing folder, got %s", app.Branch)
 	}
+	_, appPage, _ := do("GET", "/apps/kite360-api", nil)
+	if !strings.Contains(appPage, "Existing folder") || !strings.Contains(appPage, "Change how it runs") {
+		t.Fatal("app page should show the mode badge and the control to change it")
+	}
+	_, listPage, _ := do("GET", "/", nil)
+	if !strings.Contains(listPage, "Existing folder") || !strings.Contains(listPage, "Berth clone") {
+		t.Fatal("the Apps list should show how each app runs")
+	}
+
+	// switching an already-registered app
+	src := func(name, mode string) string {
+		form := url.Values{}
+		if mode != "" {
+			form.Set("mode", mode)
+		}
+		_, _, loc := do("POST", "/apps/"+name+"/source", form)
+		return loc
+	}
+	if loc := src("kite360-api", ""); !strings.Contains(loc, "err=") {
+		t.Fatalf("no choice must be refused, got %q", loc)
+	}
+	if loc := src("kite360-api", "existing"); !strings.Contains(loc, "Already") {
+		t.Fatalf("same mode should be a no-op, got %q", loc)
+	}
+	if loc := src("kite360-api", "clone"); !strings.Contains(loc, "msg=") {
+		t.Fatalf("switch to clone failed: %q", loc)
+	}
+	app, _ = srv.Store.AppByName(context.Background(), "kite360-api")
+	if app.SourceMode != "clone" || app.SourcePath != second || strings.Contains(app.RepoURL, "secret") {
+		t.Fatalf("after switching to clone: %+v", app)
+	}
+	if loc := src("kite360-api", "existing"); !strings.Contains(loc, "msg=") {
+		t.Fatalf("switch back to the existing folder failed: %q", loc)
+	}
+	app, _ = srv.Store.AppByName(context.Background(), "kite360-api")
+	if app.SourceMode != "existing" || app.SourcePath != second || app.Branch != "release" {
+		t.Fatalf("after switching back: %+v", app)
+	}
+	// a folder with the wrong remote, and an app added by hand, cannot use "existing"
+	if loc := src("other-app", "existing"); !strings.Contains(loc, "err=") || !strings.Contains(loc, "not+the+expected+repository") {
+		t.Fatalf("wrong remote must be refused, got %q", loc)
+	}
+	do("POST", "/apps", url.Values{"name": {"manual"}, "repo_url": {"https://example.com/m.git"}, "branch": {"main"}, "compose_file": {"docker-compose.yml"}})
+	if loc := src("manual", "existing"); !strings.Contains(loc, "err=") || !strings.Contains(loc, "added+by+hand") {
+		t.Fatalf("a hand-added app has no known folder, got %q", loc)
+	}
+	// a running deploy blocks switching
+	held := make(chan struct{})
+	go srv.Deploy.Idle(app.ID, func() error { <-held; return nil })
+	time.Sleep(100 * time.Millisecond)
+	if loc := src("kite360-api", "clone"); !strings.Contains(loc, "deploy+is+running") {
+		t.Fatalf("switching during a deploy must be refused, got %q", loc)
+	}
+	close(held)
 }

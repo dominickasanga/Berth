@@ -1,28 +1,33 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Apps</a>{{icon "chevron-right"}}<span aria-current="page">Discover</span></nav>{{end}}
 {{define "content"}}<h1>Discover apps</h1>
-{{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+{{if .Flash}}<p class="alert ok">{{icon "circle-check"}}<span>{{.Flash}}</span></p>{{end}}{{if .Error}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.Error}}</span></p>{{end}}
 
-<div class="card"><h2>Scan paths</h2>
+<div class="card"><h2>{{icon "folder-search"}}Scan paths</h2>
 <p class="mute">Berth looks one level deep in each folder for the expected apps below. It reads folder names and each folder's git remote and branch only.</p>
 <table>{{range .Paths}}<tr><td><code>{{.}}</code></td>
-<td style="width:1%"><form method="post" action="/discover/paths/delete"><input type="hidden" name="path" value="{{.}}"><button class="plain">Remove</button></form></td></tr>
+<td style="width:1%"><form method="post" action="/discover/paths/delete"><input type="hidden" name="path" value="{{.}}"><button class="plain act-remove">{{icon "trash-2"}}Remove</button></form></td></tr>
 {{else}}<tr><td class="mute">No paths. Add one below.</td></tr>{{end}}</table>
-{{range .Notes}}<p class="err"><code>{{.Path}}</code> {{.Problem}}</p>{{end}}
+{{range .Notes}}<p class="err">{{icon "triangle-alert"}} <code>{{.Path}}</code> {{.Problem}}</p>{{end}}
 <form method="post" action="/discover/paths" class="row" style="margin-top:10px">
-<input type="text" name="path" placeholder="/var/www" style="flex:1" required><button>Add path</button></form></div>
+<input type="text" name="path" placeholder="/var/www" style="flex:1" required><button>{{icon "plus"}}Add path</button></form></div>
 
-<div class="card"><h2>Expected apps</h2>
+<div class="card"><h2>{{icon "box"}}Expected apps</h2>
 {{range .Rows}}<div style="padding:10px 0;border-top:1px solid var(--line)">
-<div class="row"><strong>{{.App.Title}}</strong> <span class="mute">{{.App.Name}}{{if .App.Monitor}} · monitored{{end}}</span><span style="flex:1"></span>
-{{if .Registered}}<a class="btn" href="/apps/{{.App.Name}}">Open</a>
-{{else if .NeedsChoice}}<span class="err">Flag one copy to continue</span>
-{{else}}<form method="post" action="/discover/register"><input type="hidden" name="expected" value="{{.App.Name}}"><button>Register</button></form>{{end}}</div>
+<div class="row"><strong>{{.App.Title}}</strong> <span class="mute">{{.App.Name}}</span>{{if .App.Monitor}}<span class="badge info">Monitored</span>{{end}}<span style="flex:1"></span>
+{{if .Registered}}<a class="btn" href="/apps/{{.App.Name}}">Open</a>{{end}}</div>
 <div class="mute">{{.App.Repo}}{{if .App.Subfolder}} · {{.App.Subfolder}}{{end}}</div>
-{{if not .Copies}}<p class="mute">Not found in any scan path{{if not .Registered}}. You can still register it; Berth will clone it.{{end}}</p>{{end}}
+{{if not .Copies}}<p class="mute">Not found in any scan path.</p>{{end}}
 {{if gt (len .Copies) 1}}<p class="err">Found in {{len .Copies}} places. Flag the one Berth should treat as the real copy.</p>{{end}}
 {{$row := .}}{{range .Copies}}<div class="row" style="margin:6px 0"><div style="flex:1">
-<code>{{.Path}}</code>{{if .Branch}} <span class="mute">branch {{.Branch}}</span>{{end}}
+<code>{{.Path}}</code>{{if .Branch}} <span class="mute">{{icon "git-branch"}} {{.Branch}}</span>{{end}}
 {{if .Remote}}<div class="mute">{{.Remote}}</div>{{end}}
-{{with .Warning}}<div class="err">{{.}}</div>{{end}}</div>
-{{if eq .Path $row.Chosen}}<strong class="ok">✓ Using this copy</strong>
-{{else if gt (len $row.Copies) 1}}<form method="post" action="/discover/choose"><input type="hidden" name="expected" value="{{$row.App.Name}}"><input type="hidden" name="path" value="{{.Path}}"><button class="plain">Use this copy</button></form>{{end}}</div>{{end}}
+{{with .Warning}}<div class="err">{{icon "triangle-alert"}} {{.}}</div>{{end}}</div>
+{{if eq .Path $row.Chosen}}<span class="badge ok">Using this copy</span>
+{{else if gt (len $row.Copies) 1}}<form method="post" action="/discover/choose"><input type="hidden" name="expected" value="{{$row.App.Name}}"><input type="hidden" name="path" value="{{.Path}}"><button class="plain">{{icon "circle-check"}}Use this copy</button></form>{{end}}</div>{{end}}
+{{if not .Registered}}<form method="post" action="/discover/register"><input type="hidden" name="expected" value="{{.App.Name}}">
+<fieldset><legend>How should Berth run it? Choose one.</legend>
+{{if .CanUseExisting}}<label class="opt"><input type="radio" name="mode" value="existing" required><span>Use the existing folder <code>{{.Chosen}}</code><br><span class="mute">Berth updates it with fast-forward only and never resets, cleans or switches branches there. Edit the <code>.env</code> next to its compose file by hand whenever you like; variables saved in Berth override it.</span></span></label>
+{{else}}<label class="opt off"><input type="radio" disabled><span>Use the existing folder<br><span class="mute">Not available: {{.ExistingWhy}}.</span></span></label>{{end}}
+<label class="opt"><input type="radio" name="mode" value="clone" required><span>Clone a new copy managed by Berth<br><span class="mute">Berth keeps its own clone and may reset it on each deploy. Manage variables in Berth.</span></span></label>
+</fieldset><button>{{icon "plus"}}Register</button></form>{{end}}
 </div>{{end}}</div>{{end}}

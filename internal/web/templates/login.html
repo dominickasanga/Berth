@@ -1,6 +1,6 @@
-{{define "content"}}<div class="card" style="max-width:380px;margin:60px auto">
-<h1>Berth</h1>
-{{with .}}{{if .Error}}<p class="err">{{.Error}}</p>{{end}}{{end}}
+{{define "content"}}<div class="card login">
+<div class="logo"><img src="/static/logo.svg?v={{v}}" alt=""><h1>Berth</h1></div>
+{{with .}}{{if .Error}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.Error}}</span></p>{{end}}{{end}}
 <form method="post" action="/login">
 <label>Username</label><input type="text" name="username" autocomplete="username" required autofocus>
 <label>Password</label><input type="password" name="password" autocomplete="current-password" required>

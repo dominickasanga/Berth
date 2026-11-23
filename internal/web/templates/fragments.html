@@ -1,2 +1,11 @@
-{{define "status"}}{{if .Err}}<span class="err">{{.Err}}</span>{{else if .Out}}<pre>{{.Out}}</pre>{{else}}<span class="mute">not deployed</span>{{end}}{{end}}
+{{define "status"}}{{if .Err}}<p class="alert bad">{{icon "triangle-alert"}}<span>{{.Err}}</span></p>{{else}}
+<p style="margin:0 0 8px" class="row">{{if eq .State "running"}}<span class="badge ok">Running</span>{{else if eq .State "stopped"}}<span class="badge warn">Stopped</span> <span class="mute">built and ready: click Start</span>{{else}}<span class="badge">Not deployed</span> <span class="mute">nothing is built yet: click Deploy</span>{{end}}
+{{with .Last}}<span class="mute">last {{.Kind}} #{{.ID}}</span> <span class="badge {{.Status}}">{{.Status}}</span>{{if .CommitSHA}} <span class="mute">{{printf "%.8s" .CommitSHA}}</span>{{end}}{{end}}</p>
+{{if .Services}}<table>{{range .Services}}<tr><td>{{icon "box"}} <code>{{.Service}}</code></td><td>{{if eq .State "running"}}<span class="badge ok">running{{if .Health}} · {{.Health}}{{end}}</span>{{else}}<span class="badge">{{.State}}</span>{{end}}</td><td class="mute">{{.Status}}</td></tr>{{end}}</table>{{end}}{{end}}
+<form class="row" method="post" action="/apps/{{.AppName}}/control" style="margin-top:12px">
+<button class="plain act-start" name="action" value="start" {{if not .CanStart}}disabled title="Start works only when the app is built and stopped"{{end}}>{{icon "play"}}Start</button>
+<button class="plain act-stop" name="action" value="stop" {{if not .CanStop}}disabled title="Nothing is running"{{end}}>{{icon "square"}}Stop</button>
+<button class="plain act-restart" name="action" value="restart" {{if not .CanRestart}}disabled title="Nothing is running"{{end}}>{{icon "rotate-cw"}}Restart</button>
+<button type="button" class="plain act-logs" data-open-logs {{if eq .State "none"}}disabled title="Nothing is deployed yet, so there are no logs"{{end}}>{{icon "terminal"}}Logs</button></form>{{end}}
+{{define "status-compact"}}{{if .Err}}<span class="badge bad">unavailable</span>{{else if eq .State "running"}}<span class="badge ok">Running</span>{{else if eq .State "stopped"}}<span class="badge warn">Stopped</span>{{else}}<span class="badge">Not deployed</span>{{end}}{{end}}
 {{define "log"}}<pre>{{.Log}}</pre>{{end}}

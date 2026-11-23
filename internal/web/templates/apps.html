@@ -1,5 +1,6 @@
-{{define "content"}}<div class="row"><h1 style="flex:1">Apps</h1><a class="btn" href="/apps/new">Register app</a></div>
-{{if .Apps}}<div class="card"><table><tr><th>Name</th><th>Repo</th><th>Branch</th><th>Status</th></tr>
-{{range .Apps}}<tr><td><a href="/apps/{{.Name}}">{{.Name}}</a></td><td class="mute">{{.RepoURL}}{{if .Subfolder}} / {{.Subfolder}}{{end}}</td><td>{{.Branch}}</td>
-<td hx-get="/apps/{{.Name}}/status" hx-trigger="load" class="mute">…</td></tr>{{end}}</table></div>
-{{else}}<div class="card mute">No apps registered yet.</div>{{end}}{{end}}
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><span aria-current="page">Apps</span></nav>{{end}}
+{{define "content"}}<div class="row"><h1 style="flex:1">Apps</h1><a class="btn" href="/apps/new">{{icon "plus"}}Register app</a></div>
+{{if .Apps}}<div class="card"><table><tr><th>Name</th><th>Repo</th><th>Branch</th><th>Runs from</th><th>Status</th></tr>
+{{range .Apps}}<tr><td><a href="/apps/{{.Name}}">{{icon "box"}} {{.Name}}</a></td><td class="mute">{{.RepoURL}}{{if .Subfolder}} / {{.Subfolder}}{{end}}</td><td>{{icon "git-branch"}} {{.Branch}}</td><td>{{if eq .SourceMode "existing"}}<span class="badge info">Existing folder</span>{{else}}<span class="badge">Berth clone</span>{{end}}</td>
+<td hx-get="/apps/{{.Name}}/status?view=compact" hx-trigger="load" class="mute">…</td></tr>{{end}}</table></div>
+{{else}}<div class="card mute">No apps registered yet. Use <a href="/discover">Discover</a> or Register app.</div>{{end}}{{end}}

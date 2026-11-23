@@ -1,29 +1,35 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Apps</a>{{icon "chevron-right"}}<span aria-current="page">{{.App.Name}}</span></nav>{{end}}
 {{define "content"}}
 <div class="row"><h1 style="flex:1">{{.App.Name}}</h1>
-<form method="post" action="/apps/{{.App.Name}}/deploy"><button>Deploy</button></form></div>
-{{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
-<div class="card"><h2>Status</h2>
+<form method="post" action="/apps/{{.App.Name}}/deploy"><button>{{icon "rocket"}}Deploy</button></form></div>
+{{if .Flash}}<p class="alert ok">{{icon "circle-check"}}<span>{{.Flash}}</span></p>{{end}}{{if .Err}}<pre class="err">{{.Err}}</pre>{{end}}
+<div class="card"><h2>{{icon "circle-dot"}}Status</h2>
 <div hx-get="/apps/{{.App.Name}}/status" hx-trigger="load, every 10s">…</div>
-<form class="row" method="post" action="/apps/{{.App.Name}}/control" style="margin-top:12px">
-<button class="plain" name="action" value="start">Start</button>
-<button class="plain" name="action" value="stop">Stop</button>
-<button class="plain" name="action" value="restart">Restart</button></form>
 <p class="mute">{{.App.RepoURL}} · {{.App.Branch}}{{if .App.Subfolder}} · {{.App.Subfolder}}{{end}} · {{.App.ComposeFile}}{{if .App.PredeploySvc}} · pre-deploy: {{.App.PredeploySvc}}{{end}}</p>
-{{if .App.Monitor}}<p class="mute">Flagged for monitoring.</p>{{end}}
-{{if .App.SourcePath}}<p class="mute">Found on this server at <code>{{.App.SourcePath}}</code>. Berth deploys from its own clone and never changes that folder.</p>{{end}}</div>
-<div class="card"><h2>Environment &amp; secrets</h2>
+{{if .App.Monitor}}<p><span class="badge info">Monitored</span></p>{{end}}
+<p class="row" style="margin:6px 0"><span class="badge {{if eq .App.SourceMode "existing"}}info{{end}}">{{if eq .App.SourceMode "existing"}}Existing folder{{else}}Berth clone{{end}}</span>
+<span class="mute">{{if eq .App.SourceMode "existing"}}Runs from <code>{{.App.SourcePath}}</code>. Deploys only fast-forward it; Berth never resets or deletes anything there. The <code>.env</code> next to its compose file is used as you edit it, and variables saved below override it.{{else}}Berth deploys from its own clone{{if .App.SourcePath}}; a copy at <code>{{.App.SourcePath}}</code> is not touched{{end}}.{{end}}</span></p>
+<details><summary class="more">{{icon "chevron-right"}}Change how it runs</summary>
+<form method="post" action="/apps/{{.App.Name}}/source"><fieldset><legend>Choose one</legend>
+{{if .Src.CanUseExisting}}<label class="opt"><input type="radio" name="mode" value="existing" required {{if eq .App.SourceMode "existing"}}disabled{{end}}><span>Use the existing folder <code>{{.Src.Path}}</code>{{if eq .App.SourceMode "existing"}} <span class="badge info">current</span>{{end}}<br><span class="mute">Fast-forward updates only; hand edits to its <code>.env</code> and files are kept.</span></span></label>
+{{else}}<label class="opt off"><input type="radio" disabled><span>Use the existing folder<br><span class="mute">Not available: {{.Src.Why}}.</span></span></label>{{end}}
+<label class="opt"><input type="radio" name="mode" value="clone" required {{if ne .App.SourceMode "existing"}}disabled{{end}}><span>Use a clone managed by Berth{{if ne .App.SourceMode "existing"}} <span class="badge">current</span>{{end}}<br><span class="mute">Berth keeps its own copy and may reset it on each deploy. Deploy afterwards to create it.</span></span></label>
+</fieldset><button class="plain" {{if and (ne .App.SourceMode "existing") (not .Src.CanUseExisting)}}disabled{{end}}>Apply</button> <span class="mute">Takes effect on the next deploy. Nothing is deleted.</span></form></details></div>
+<div class="card"><h2>{{icon "key-round"}}Environment &amp; secrets</h2>
 <table>{{range .Env}}<tr><td><code>{{.Key}}</code></td><td>{{if .IsSecret}}<span class="mute">secret, hidden</span>{{else}}<code>{{.Value}}</code>{{end}}</td>
-<td><form method="post" action="/apps/{{$.App.Name}}/env/delete" data-confirm="Remove {{.Key}}?"><input type="hidden" name="key" value="{{.Key}}"><button class="plain">Remove</button></form></td></tr>
+<td><form method="post" action="/apps/{{$.App.Name}}/env/delete" data-confirm="Remove {{.Key}}?"><input type="hidden" name="key" value="{{.Key}}"><button class="plain act-remove">{{icon "trash-2"}}Remove</button></form></td></tr>
 {{else}}<tr><td class="mute">None yet.</td></tr>{{end}}</table>
 <form method="post" action="/apps/{{.App.Name}}/env">
 <div class="row"><input type="text" name="key" placeholder="KEY" required style="flex:1"><input type="password" name="value" placeholder="value" autocomplete="off" style="flex:2">
-<label style="margin:0"><input type="checkbox" name="secret" checked> secret</label><button>Save</button></div></form>
+<label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" name="secret" checked> secret</label><button>Save</button></div></form>
 <p class="mute">Saving an existing key replaces it. Changes apply on the next deploy.</p></div>
-<div class="card"><h2>Logs</h2>
-<div class="row"><button class="plain" id="logs-start" data-url="/apps/{{.App.Name}}/logs/stream">Show live logs</button><button class="plain" id="logs-stop" hidden>Stop</button></div>
+<div class="card logbox" id="logbox"><div class="logbar"><h2>{{icon "terminal"}}Logs</h2>
+<button class="plain" id="logs-latest" hidden>{{icon "arrow-down"}}Latest</button>
+<button class="plain" id="logs-side" hidden>{{icon "panel-right"}}Side panel</button><button class="plain" id="logs-full" hidden>{{icon "maximize"}}Full screen</button><button class="plain" id="logs-dock" hidden>{{icon "minimize"}}Back to page</button>
+<button class="plain act-start" id="logs-start" data-url="/apps/{{.App.Name}}/logs/stream">{{icon "play"}}Show live logs</button><button class="plain act-stop" id="logs-stop" hidden>{{icon "square"}}Stop</button></div>
 <pre id="logs" hidden></pre></div>
-<div class="card"><h2>Deploys</h2>
-{{range .Deploys}}<details {{if eq .Status "running"}}open{{end}}><summary><span class="{{.Status}}">{{.Status}}</span> · {{.Kind}} #{{.ID}} · {{.StartedAt.Format "2006-01-02 15:04"}}{{if .CommitSHA}} · {{printf "%.8s" .CommitSHA}}{{end}}</summary>
-{{if .CanRollback}}<form method="post" action="/apps/{{$.App.Name}}/rollback" data-confirm="Roll back to deploy #{{.ID}}? Database migrations are not undone."><input type="hidden" name="deploy_id" value="{{.ID}}"><button class="plain">Roll back to this</button></form>{{end}}
+<div class="card"><h2>{{icon "rocket"}}Deploys</h2>
+{{range .Deploys}}<details {{if eq .Status "running"}}open{{end}}><summary><span class="badge {{.Status}}">{{.Status}}</span> <span>{{.Kind}} #{{.ID}}</span><span class="mute">{{.StartedAt.Format "2006-01-02 15:04"}}{{if .CommitSHA}} · {{printf "%.8s" .CommitSHA}}{{end}}</span></summary>
+{{if .CanRollback}}<form method="post" action="/apps/{{$.App.Name}}/rollback" data-confirm="Roll back to deploy #{{.ID}}? Database migrations are not undone." style="margin:8px 0"><input type="hidden" name="deploy_id" value="{{.ID}}"><button class="plain">{{icon "undo-2"}}Roll back to this</button></form>{{end}}
 <div hx-get="/deploys/{{.ID}}/log" hx-trigger="load{{if eq .Status "running"}}, every 2s{{end}}" hx-swap="innerHTML">…</div></details>
 {{else}}<p class="mute">No deploys yet.</p>{{end}}</div>{{end}}

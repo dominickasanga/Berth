@@ -141,13 +141,14 @@ type App struct {
 	PredeploySvc string
 	SourcePath   string
 	Monitor      bool
+	SourceMode   string // "clone" (Berth's own clone) or "existing" (the folder in SourcePath)
 }
 
-const appCols = `id, name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor`
+const appCols = `id, name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor, source_mode`
 
 func scanApp(row pgx.Row) (*App, error) {
 	a := &App{}
-	err := row.Scan(&a.ID, &a.Name, &a.RepoURL, &a.Branch, &a.Subfolder, &a.ComposeFile, &a.PredeploySvc, &a.SourcePath, &a.Monitor)
+	err := row.Scan(&a.ID, &a.Name, &a.RepoURL, &a.Branch, &a.Subfolder, &a.ComposeFile, &a.PredeploySvc, &a.SourcePath, &a.Monitor, &a.SourceMode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -155,8 +156,11 @@ func scanApp(row pgx.Row) (*App, error) {
 }
 
 func (s *Store) CreateApp(ctx context.Context, a App) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO apps (name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, a.Name, a.RepoURL, a.Branch, a.Subfolder, a.ComposeFile, a.PredeploySvc, a.SourcePath, a.Monitor)
+	if a.SourceMode == "" {
+		a.SourceMode = "clone"
+	}
+	_, err := s.Pool.Exec(ctx, `INSERT INTO apps (name, repo_url, branch, subfolder, compose_file, predeploy_svc, source_path, monitor, source_mode)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, a.Name, a.RepoURL, a.Branch, a.Subfolder, a.ComposeFile, a.PredeploySvc, a.SourcePath, a.Monitor, a.SourceMode)
 	return err
 }
 
@@ -179,6 +183,13 @@ func (s *Store) ListApps(ctx context.Context) ([]App, error) {
 		out = append(out, *a)
 	}
 	return out, rows.Err()
+}
+
+// UpdateAppSource switches how an app runs: "clone" (Berth's own copy) or "existing" (a folder).
+func (s *Store) UpdateAppSource(ctx context.Context, id int64, mode, path, repoURL, branch string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE apps SET source_mode=$2, source_path=$3, repo_url=$4, branch=$5 WHERE id=$1`,
+		id, mode, path, repoURL, branch)
+	return err
 }
 
 // ---- discovery ----

@@ -7,7 +7,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     var btn = document.getElementById('theme-toggle');
     if (!btn) return;
-    function label() { btn.textContent = root.getAttribute('data-theme') === 'dark' ? '☀ Light' : '☾ Dark'; }
+    function label() { btn.title = root.getAttribute('data-theme') === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'; }
     label();
     btn.addEventListener('click', function () {
       var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
