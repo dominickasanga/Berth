@@ -181,8 +181,8 @@ func (s *Sampler) reconcileAlerts(ctx context.Context, v store.Service, conds []
 }
 
 func (s *Sampler) notify(ctx context.Context, v store.Service, a store.Alert, resolved bool) {
-	if s.Mail == nil {
-		return
+	if s.Mail == nil || v.Muted(time.Now()) {
+		return // not emailed now; an alert still open when the pause ends is emailed then
 	}
 	state, what := "FIRING", a.Severity
 	if resolved {

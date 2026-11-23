@@ -20,14 +20,16 @@ type Service struct {
 	Password []byte // encrypted; nil when none
 	Params   map[string]string
 	Enabled  bool
+	// MutedUntil pauses alert emails until then; nil means not paused. See Muted.
+	MutedUntil *time.Time
 }
 
-const serviceCols = `id, name, kind, host, port, username, password, params, enabled`
+const serviceCols = `id, name, kind, host, port, username, password, params, enabled, alerts_muted_until`
 
 func scanService(row pgx.Row) (*Service, error) {
 	s := &Service{}
 	var params []byte
-	err := row.Scan(&s.ID, &s.Name, &s.Kind, &s.Host, &s.Port, &s.Username, &s.Password, &params, &s.Enabled)
+	err := row.Scan(&s.ID, &s.Name, &s.Kind, &s.Host, &s.Port, &s.Username, &s.Password, &params, &s.Enabled, &s.MutedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -37,6 +39,21 @@ func scanService(row pgx.Row) (*Service, error) {
 	s.Params = map[string]string{}
 	json.Unmarshal(params, &s.Params)
 	return s, nil
+}
+
+// MutedForever is the MutedUntil value for "until resumed by hand".
+var MutedForever = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// Muted reports whether alert emails for the service are paused at now.
+func (v Service) Muted(now time.Time) bool { return v.MutedUntil != nil && now.Before(*v.MutedUntil) }
+
+// MutedIndefinitely reports a pause that has no end time.
+func (v Service) MutedIndefinitely() bool { return v.MutedUntil != nil && v.MutedUntil.Year() >= 9999 }
+
+// SetServiceMute pauses alert emails until the given time; nil resumes them.
+func (s *Store) SetServiceMute(ctx context.Context, id int64, until *time.Time) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE services SET alerts_muted_until=$2 WHERE id=$1`, id, until)
+	return err
 }
 
 func (s *Store) CreateService(ctx context.Context, v Service) (int64, error) {

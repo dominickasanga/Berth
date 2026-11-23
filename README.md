@@ -276,6 +276,7 @@ go build -o berth ./cmd/berth
 | `BERTH_METRICS_INTERVAL` | `30` | seconds between checks of each monitored service (minimum 5) |
 | `BERTH_METRICS_RETENTION_DAYS` | `7` | how long samples are kept |
 | `BERTH_SMTP_HOST`, `BERTH_SMTP_PORT` (587), `BERTH_SMTP_USER`, `BERTH_SMTP_PASS`, `BERTH_SMTP_FROM`, `BERTH_ALERT_TO` | unset | alert email. Both host and `BERTH_ALERT_TO` (comma-separated) are needed. STARTTLS is used when offered; port 465 uses TLS. Without them alerts are shown on the Services page only |
+| `BERTH_ALERT_URL`, `BERTH_ALERT_TO`, `BERTH_ALERT_BRAND`, `BERTH_ALERT_FROM_NAME` (`Berth`) | unset | alert email through GopherPost instead of SMTP: `BERTH_ALERT_URL` is its send-email endpoint (`http://127.0.0.1:8787/api55/v65/send-email`), `BERTH_ALERT_TO` the recipients. GopherPost sends non-`linmalawi.org` recipients (Gmail included) through Brevo. `BERTH_ALERT_BRAND=kite360` sends as `noreply@kite360.live` (verified in Brevo with DKIM and DMARC) with Kite360 branding; empty uses GopherPost's default sender and branding. Takes priority over the SMTP variables |
 | `BERTH_PUBLIC_URL` | unset | base URL (including the prefix) used for links in alert emails |
 | `BERTH_REQUEST_LOG` | `quiet` | request log: `quiet` (default), `all` or `off`; see section 11 |
 | `BERTH_LOG_FILE` | `<data dir>/logs/berth.log` | Berth's own log file; set to an empty string to turn the file off |
@@ -471,6 +472,12 @@ against real PostgreSQL, Redis, MongoDB and RabbitMQ.
   An alert opens once, is emailed once, and a "RESOLVED" email follows when it clears. An email
   that could not be sent is retried on later checks. Alerts always show on the Services page,
   even without email set up.
+- **Pausing alert emails:** on a service's page, *Alert emails* pauses the emails for 1 hour,
+  4 hours, 24 hours, 7 days or until you resume them (for a planned restart, or a service you
+  have stopped on purpose). Checks, graphs and the alerts on the Services page carry on, and the
+  card shows *emails paused*. If the problem is still there when the pause ends, the email is
+  sent then. The pause is recorded in the Audit page. To stop checking a service altogether,
+  edit it and untick *enabled*.
 - Berth keeps its own pool to its database at 5 connections (the pgx default is one per CPU), because it shares the PostgreSQL server with the apps it manages. Each Postgres check opens one short-lived connection, named `berth-monitor` in `pg_stat_activity`.
 - Passwords are stored encrypted like app secrets and are never shown again. When you edit a service and leave the password empty, the saved one is kept, unless you changed the username, host or port: then Berth asks you to type the password again, because the saved one belongs to the old settings. Berth only reads;
   use read-only monitoring users.
@@ -523,3 +530,35 @@ cd /mnt/blockvolume/Berth
   `git fetch origin && git reset --hard origin/main` is safe (it never touches `data/`, which is ignored).
 - If the repository is private, `git pull` needs credentials on the server (an SSH remote or a token).
 - Needs Go 1.26 or newer (the server has 1.27.3) and internet access for the Go modules.
+
+## 14. Moving an app under Berth: checklist
+
+Learned moving the Kite360 and NyasaHub apps from hand-started processes and containers to Berth
+on 2026-11-23. All four apps (Kite360 web and API, NyasaHub web and API) now run through Berth.
+
+1. **Back up the database first** (`pg_dump -Fc <db>`) and keep a copy off the server.
+2. **A container cannot use `127.0.0.1` or `localhost` for host services.** Use
+   `host.docker.internal` for PostgreSQL, RabbitMQ, GopherPost and the rest. Save those values as
+   Berth variables: they win over `.env`, so a still-running old process keeps reading its own `.env`.
+   (An app that can use `network_mode: host`, like the NyasaHub API, does not need this.)
+3. **PostgreSQL:** add `host <db> <user> 172.16.0.0/12 scram-sha-256` to `pg_hba.conf`, reload, and test
+   from a throwaway container before deploying:
+   `docker run --rm --add-host host.docker.internal:host-gateway -e PGPASSWORD postgres:14-alpine psql "host=host.docker.internal user=... dbname=..."`.
+4. **RabbitMQ `guest` only works from the same machine,** so a container needs its own user
+   (`rabbitmqctl add_user`, `set_permissions`).
+5. **Run the container as the owner of the host folders it writes to** (`APP_UID`/`APP_GID`, 1001 is
+   `ubuntu`). Files such as a Firebase key must be mounted (`SECRETS_DIR`) and the path variable must
+   be the path *inside* the container (`/run/secrets/kite360/...`).
+6. **Networks shared by two stacks** (here `kite360`, used by the API and Gotenberg) are declared
+   `external: true` in both and created once by hand: Compose refuses to adopt a network it did not create.
+7. **Exactly one scheduler.** `SCHEDULER_ENABLED=true` in one running process only. The Kite360 API logs
+   `reminders ready` (on) or `reminders NOT ready: SCHEDULER_ENABLED is false` (off); check it after every deploy.
+8. **Stop the old process before the container binds its port,** and make sure nothing revives it
+   (`crontab -l`, systemd units, pm2). Record how it was started, in case you need to go back.
+9. **Email loses mail silently when sending is broken:** the Kite360 consumer retries four times, then
+   acknowledges the message and records `failed` in `public.email_log`. After a move, check
+   `SELECT status, count(*) FROM public.email_log WHERE date_created > now() - interval '30 minutes' GROUP BY status`
+   and expect `sent`.
+10. **Existing stacks keep their volumes** only if Berth uses their compose project name
+    (`compose_project`), see section 9.
+11. **Never commit `.env` copies** (`.env.*`, `*.bak`); check `git ls-files | grep env` first.

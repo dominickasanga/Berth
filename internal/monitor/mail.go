@@ -3,8 +3,11 @@ package monitor
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/smtp"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,9 +28,56 @@ type SMTP struct {
 	To       []string
 }
 
-// MailerFromEnv builds a mailer from BERTH_SMTP_HOST, _PORT, _USER, _PASS, _FROM and BERTH_ALERT_TO.
-// It returns nil when email is not configured.
+// HTTPMail sends through GopherPost's send-email endpoint (form fields to, subject, body, fromName, brand).
+type HTTPMail struct {
+	URL      string // e.g. http://127.0.0.1:8787/api55/v65/send-email
+	FromName string
+	Brand    string // optional GopherPost brand, e.g. kite360
+	To       []string
+	Client   *http.Client
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, a := range strings.Split(s, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (m *HTTPMail) Send(subject, body string) error {
+	c := m.Client
+	if c == nil {
+		c = &http.Client{Timeout: 30 * time.Second}
+	}
+	form := url.Values{"to": {strings.Join(m.To, ",")}, "subject": {subject}, "body": {body}, "fromName": {m.FromName}}
+	if m.Brand != "" {
+		form.Set("brand", m.Brand)
+	}
+	resp, err := c.PostForm(m.URL, form)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return fmt.Errorf("mail service answered %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// MailerFromEnv builds a mailer from BERTH_ALERT_TO plus either BERTH_ALERT_URL (GopherPost) or
+// BERTH_SMTP_HOST, _PORT, _USER, _PASS, _FROM. It returns nil when email is not configured.
 func MailerFromEnv(get func(string) string) Mailer {
+	if u, to := strings.TrimSpace(get("BERTH_ALERT_URL")), splitList(get("BERTH_ALERT_TO")); u != "" && len(to) > 0 {
+		name := strings.TrimSpace(get("BERTH_ALERT_FROM_NAME"))
+		if name == "" {
+			name = "Berth"
+		}
+		return &HTTPMail{URL: u, FromName: name, Brand: strings.TrimSpace(get("BERTH_ALERT_BRAND")), To: to}
+	}
 	host, to := strings.TrimSpace(get("BERTH_SMTP_HOST")), strings.TrimSpace(get("BERTH_ALERT_TO"))
 	if host == "" || to == "" {
 		return nil
@@ -44,11 +94,7 @@ func MailerFromEnv(get func(string) string) Mailer {
 		from = "berth@localhost"
 	}
 	m := &SMTP{Host: host, Port: port, User: get("BERTH_SMTP_USER"), Password: get("BERTH_SMTP_PASS"), From: from}
-	for _, a := range strings.Split(to, ",") {
-		if a = strings.TrimSpace(a); a != "" {
-			m.To = append(m.To, a)
-		}
-	}
+	m.To = splitList(to)
 	return m
 }
 

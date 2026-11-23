@@ -26,6 +26,7 @@ type serviceCard struct {
 	State   *store.ServiceState
 	Stats   []stat
 	Alerts  int
+	Muted   bool // alert emails are paused
 }
 
 func (s *Server) kindDef(kind string) (monitor.KindDef, bool) { return monitor.Kind(kind) }
@@ -68,7 +69,7 @@ func (s *Server) servicesPage(w http.ResponseWriter, r *http.Request, a *store.A
 	for _, v := range services {
 		st, _ := s.Store.ServiceState(ctx, v.ID)
 		kd, _ := monitor.Kind(v.Kind)
-		cards = append(cards, serviceCard{Service: v, Kind: kd, State: st, Stats: statsFor(kd, st), Alerts: perService[v.ID]})
+		cards = append(cards, serviceCard{Muted: v.Muted(time.Now()), Service: v, Kind: kd, State: st, Stats: statsFor(kd, st), Alerts: perService[v.ID]})
 	}
 	resolved, _ := s.Store.RecentResolvedAlerts(ctx, 8)
 	have := map[string]bool{}
@@ -321,6 +322,43 @@ func (s *Server) serviceCheck(w http.ResponseWriter, r *http.Request, a *store.A
 	s.redirect(w, r, "/services/"+strconv.FormatInt(v.ID, 10))
 }
 
+// muteChoices are the pause lengths offered on the service page; "off" resumes alerts.
+var muteOptions = []struct{ Key, Label string }{{"1h", "Pause 1 hour"}, {"4h", "Pause 4 hours"}, {"24h", "Pause 24 hours"}, {"7d", "Pause 7 days"}, {"forever", "Pause until resumed"}}
+
+var muteChoices = map[string]time.Duration{"1h": time.Hour, "4h": 4 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}
+
+// serviceMute pauses alert emails for one service for a while, or until resumed, or resumes them.
+func (s *Server) serviceMute(w http.ResponseWriter, r *http.Request, a *store.Admin) {
+	v := s.loadService(w, r)
+	if v == nil {
+		return
+	}
+	choice := r.FormValue("for")
+	var until *time.Time
+	switch d, ok := muteChoices[choice]; {
+	case ok:
+		t := time.Now().Add(d)
+		until = &t
+	case choice == "forever":
+		t := store.MutedForever
+		until = &t
+	case choice == "off":
+	default:
+		http.Error(w, "bad request", 400)
+		return
+	}
+	if err := s.Store.SetServiceMute(r.Context(), v.ID, until); err != nil {
+		http.Error(w, "server error", 500)
+		return
+	}
+	msg := "alert emails resumed"
+	if until != nil {
+		msg = "alert emails paused"
+	}
+	s.Store.Audit(r.Context(), a.Username, "service.mute", v.Name+" "+choice)
+	s.redirect(w, r, "/services/"+strconv.FormatInt(v.ID, 10)+"?msg="+url.QueryEscape(msg))
+}
+
 // serviceTest tries the form's settings once without saving them (an htmx fragment).
 func (s *Server) serviceTest(w http.ResponseWriter, r *http.Request, a *store.Admin) {
 	f, pw, msg := formFromRequest(r)
@@ -426,5 +464,5 @@ func (s *Server) serviceDetail(w http.ResponseWriter, r *http.Request, a *store.
 	}
 	s.render(w, "service", map[string]any{"User": a.Username, "S": v, "Kind": kd, "State": st, "Info": info, "Tables": tables, "Charts": charts,
 		"Open": open, "Range": rangeKey, "Ranges": ranges, "Cards": statsFor(kd, st), "HasPassword": len(v.Password) > 0,
-		"Flash": r.URL.Query().Get("msg"), "MailOn": s.MailOn})
+		"Flash": r.URL.Query().Get("msg"), "MailOn": s.MailOn, "Muted": v.Muted(now), "MutedForever": v.MutedIndefinitely(), "MuteOptions": muteOptions})
 }

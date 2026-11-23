@@ -10,6 +10,7 @@
 {{if .Cards}}<div class="grid">{{range .Cards}}<a class="card svc" href="{{base}}/services/{{.Service.ID}}">
 <div class="row" style="margin-bottom:6px"><strong style="font-size:16px">{{.Service.Name}}</strong><span style="flex:1"></span>
 {{if not .Service.Enabled}}<span class="badge">paused</span>{{else if not .State}}<span class="badge">waiting</span>{{else if .State.Up}}<span class="badge ok">Up</span>{{else}}<span class="badge failed">Down</span>{{end}}
+{{if .Muted}}<span class="badge">emails paused</span>{{end}}
 {{if .Alerts}}<span class="badge warn">{{.Alerts}} alert{{if gt .Alerts 1}}s{{end}}</span>{{end}}</div>
 <div class="mute" style="margin-bottom:8px">{{.Kind.Label}}{{if .Service.Host}} · {{.Service.Host}}{{if .Service.Port}}:{{.Service.Port}}{{end}}{{end}}</div>
 {{if and .State (not .State.Up)}}<p class="err" style="margin:0 0 6px">{{.State.Error}}</p>{{end}}

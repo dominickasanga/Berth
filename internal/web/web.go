@@ -125,6 +125,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /services/{id}", s.auth(s.serviceUpdate))
 	mux.HandleFunc("POST /services/{id}/delete", s.auth(s.serviceDelete))
 	mux.HandleFunc("POST /services/{id}/check", s.auth(s.serviceCheck))
+	mux.HandleFunc("POST /services/{id}/mute", s.auth(s.serviceMute))
 	mux.HandleFunc("GET /audit", s.auth(s.auditPage))
 	mux.HandleFunc("GET /logs", s.auth(s.logsPage))
 	mux.HandleFunc("GET /logs/stream", s.auth(s.logsStream))

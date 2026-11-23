@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -227,5 +228,87 @@ func TestConditionsRules(t *testing.T) {
 	}
 	if got := Conditions("redis", map[string]string{"fail_checks": "4"}, down, 3); len(got) != 0 {
 		t.Errorf("fail_checks must be respected: %v", got)
+	}
+}
+
+func TestMutedServiceSendsNoMailUntilResumed(t *testing.T) {
+	s, mail, ctx := testSampler(t)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(60 * time.Millisecond)
+	}))
+	defer slow.Close()
+	id, _ := s.Store.CreateService(ctx, store.Service{Name: "quiet", Kind: "http", Enabled: true,
+		Params: map[string]string{"url": slow.URL, "t_latency_ms": "20"}})
+	until := time.Now().Add(time.Hour)
+	if err := s.Store.SetServiceMute(ctx, id, &until); err != nil {
+		t.Fatal(err)
+	}
+	svc, _ := s.Store.ServiceByID(ctx, id)
+	if !svc.Muted(time.Now()) {
+		t.Fatalf("the service should be muted: %+v", svc.MutedUntil)
+	}
+	s.CheckService(ctx, *svc)
+	s.CheckService(ctx, *svc)
+	if open, _ := s.Store.OpenAlerts(ctx); len(open) != 1 {
+		t.Fatalf("a muted service still shows its alert on the page: %+v", open)
+	}
+	if got := mail.subjects(); len(got) != 0 {
+		t.Fatalf("no mail while muted: %v", got)
+	}
+	// resumed with the problem still there: it is mailed now, once
+	if err := s.Store.SetServiceMute(ctx, id, nil); err != nil {
+		t.Fatal(err)
+	}
+	svc, _ = s.Store.ServiceByID(ctx, id)
+	s.CheckService(ctx, *svc)
+	s.CheckService(ctx, *svc)
+	if got := mail.subjects(); len(got) != 1 || !strings.Contains(got[0], "FIRING: quiet (slow)") {
+		t.Fatalf("mailed once after resuming: %v", got)
+	}
+}
+
+func TestMuteExpiresAndForever(t *testing.T) {
+	now := time.Now()
+	past, future, forever := now.Add(-time.Minute), now.Add(time.Minute), store.MutedForever
+	for _, c := range []struct {
+		until          *time.Time
+		muted, forever bool
+	}{{nil, false, false}, {&past, false, false}, {&future, true, false}, {&forever, true, true}} {
+		v := store.Service{MutedUntil: c.until}
+		if v.Muted(now) != c.muted || v.MutedIndefinitely() != c.forever {
+			t.Errorf("until=%v: muted=%v forever=%v", c.until, v.Muted(now), v.MutedIndefinitely())
+		}
+	}
+}
+
+func TestMailerFromEnvAndGopherPost(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		got = r.PostForm
+		if r.URL.Query().Get("fail") != "" {
+			http.Error(w, "Failed to send email", 500)
+			return
+		}
+		w.Write([]byte("Email sent successfully!"))
+	}))
+	defer srv.Close()
+	env := map[string]string{"BERTH_ALERT_URL": srv.URL + "/api55/v65/send-email", "BERTH_ALERT_TO": "a@example.com, b@example.com", "BERTH_ALERT_BRAND": "kite360"}
+	m := MailerFromEnv(func(k string) string { return env[k] })
+	if err := m.Send("[Berth] FIRING: x (down)", "x is down\nsecond line"); err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("to") != "a@example.com,b@example.com" || got.Get("subject") != "[Berth] FIRING: x (down)" ||
+		got.Get("body") != "x is down\nsecond line" || got.Get("brand") != "kite360" || got.Get("fromName") != "Berth" {
+		t.Fatalf("form sent: %v", got)
+	}
+	if err := (&HTTPMail{URL: srv.URL + "/?fail=1", To: []string{"a@example.com"}}).Send("s", "b"); err == nil || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("a refused send must be an error: %v", err)
+	}
+	if MailerFromEnv(func(k string) string { return map[string]string{"BERTH_ALERT_URL": "http://x"}[k] }) != nil {
+		t.Fatal("no recipient means no mailer")
+	}
+	if _, ok := MailerFromEnv(func(k string) string { return map[string]string{"BERTH_SMTP_HOST": "h", "BERTH_ALERT_TO": "a@b.c"}[k] }).(*SMTP); !ok {
+		t.Fatal("SMTP still works as before")
 	}
 }

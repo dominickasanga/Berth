@@ -15,6 +15,12 @@
 {{if .Cards}}<dl class="stats">{{range .Cards}}<div><dt>{{.Title}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
 {{if .Info}}<table style="margin-top:8px">{{range .Info}}<tr><td class="mute" style="width:30%;text-transform:capitalize">{{.Title}}</td><td>{{.Value}}</td></tr>{{end}}</table>{{end}}{{end}}</div>
 
+<div class="card"><h2>{{icon "bell"}}Alert emails</h2>
+{{if .Muted}}<p class="alert warn">{{icon "bell"}}<span>Paused {{if .MutedForever}}until you resume them{{else}}until {{.S.MutedUntil.Format "2006-01-02 15:04"}}{{end}}. Checks and graphs continue and alerts still show on this page; no email is sent.</span></p>
+<form method="post" action="{{base}}/services/{{.S.ID}}/mute"><input type="hidden" name="for" value="off"><button class="plain act-start">Resume alert emails</button></form>
+{{else}}<p class="mute">Pause the emails while you work on this service, for example during a planned restart. Checks and graphs continue.</p>
+<form method="post" action="{{base}}/services/{{.S.ID}}/mute" class="row">{{range .MuteOptions}}<button class="plain" name="for" value="{{.Key}}" style="background:transparent;color:var(--fg);border-color:var(--line)">{{.Label}}</button>{{end}}</form>{{end}}</div>
+
 {{if .Open}}<div class="card"><h2>{{icon "bell"}}Active alerts</h2>{{range .Open}}<p style="margin:6px 0"><span class="badge {{if eq .Severity "critical"}}failed{{else}}running{{end}}">{{.Severity}}</span> {{.Message}} <span class="mute">since {{.OpenedAt.Format "2006-01-02 15:04"}}{{if .NotifiedAt}} · emailed{{else if $.MailOn}} · email pending{{end}}</span></p>{{end}}</div>{{end}}
 
 <div class="row" style="margin:4px 0 12px"><h2 style="margin:0;flex:1">{{icon "activity"}}History</h2>
