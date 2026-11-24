@@ -273,3 +273,35 @@ func (s *Store) OpenAlertsFor(ctx context.Context, serviceID int64) ([]Alert, er
 func (s *Store) RecentResolvedAlerts(ctx context.Context, limit int) ([]Alert, error) {
 	return s.queryAlerts(ctx, `WHERE a.resolved_at IS NOT NULL ORDER BY a.resolved_at DESC LIMIT $1`, limit)
 }
+
+// SecurityScan is the stored result of the last security scan of one app.
+type SecurityScan struct {
+	Result []byte
+	At     time.Time
+}
+
+// SaveSecurityScan replaces the stored scan of an app.
+func (s *Store) SaveSecurityScan(ctx context.Context, app string, result []byte, at time.Time) error {
+	_, err := s.Pool.Exec(ctx, `INSERT INTO security_scans (app, result, scanned_at) VALUES ($1,$2,$3)
+		ON CONFLICT (app) DO UPDATE SET result=$2, scanned_at=$3`, app, result, at)
+	return err
+}
+
+// SecurityScans returns the stored scans by app name.
+func (s *Store) SecurityScans(ctx context.Context) (map[string]SecurityScan, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT app, result, scanned_at FROM security_scans`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]SecurityScan{}
+	for rows.Next() {
+		var app string
+		var sc SecurityScan
+		if err := rows.Scan(&app, &sc.Result, &sc.At); err != nil {
+			return nil, err
+		}
+		out[app] = sc
+	}
+	return out, rows.Err()
+}

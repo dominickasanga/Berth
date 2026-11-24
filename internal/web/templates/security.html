@@ -1,0 +1,73 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><span aria-current="page">Security</span></nav>{{end}}
+{{define "content"}}
+<div class="row"><h1 style="flex:1">Security</h1>
+{{if .Enabled}}<form method="post" action="{{base}}/security/scan"><button class="plain act-start" {{if .Scanning}}disabled{{end}}>{{icon "rotate-cw"}}{{if .Scanning}}Scanning…{{else}}Scan now{{end}}</button></form>{{end}}</div>
+{{if .Flash}}<p class="alert ok">{{icon "circle-check"}}<span>{{.Flash}}</span></p>{{end}}
+<p class="mute">Checks every app daily: known vulnerabilities in its Go packages, risky container settings, and secrets committed to its repository.
+{{if not .Last.IsZero}}Last scan {{.Last.Format "2006-01-02 15:04"}}.{{else}}The first scan runs a couple of minutes after Berth starts.{{end}}
+Nothing is changed and no secret value is ever read into this page.</p>
+<div class="card info-note"><p style="margin:0"><strong>Read the results carefully.</strong> A clean result means <em>no known</em> problem, not that something is safe. A package listed here uses a version with a published
+vulnerability: that is a reason to update, but the flaw may not be reachable from your code. Package versions are compared with the public Go vulnerability database (<code>vuln.go.dev</code>) on this server:
+only that database's generic index is downloaded, your package list is not sent anywhere.</p></div>
+
+<div class="tiles">
+<div class="card tile {{if .Vulns}}warn{{else}}ok{{end}}"><div class="mute">{{icon "box"}} Vulnerable packages</div><div class="big">{{.Vulns}}</div><div class="mute">with a known vulnerability, over all apps</div></div>
+<div class="card tile {{if .High}}bad{{else if .Issues}}warn{{else}}ok{{end}}"><div class="mute">{{icon "server"}} Container issues</div><div class="big">{{.Issues}}</div><div class="mute">{{.High}} serious</div></div>
+<div class="card tile {{if .Tracked}}bad{{else if .History}}warn{{else}}ok{{end}}"><div class="mute">{{icon "key-round"}} Secrets in repos</div><div class="big">{{.Tracked}}</div><div class="mute">in the repository · {{.History}} only in history</div></div>
+{{if and .SSH (not .SSH.Error)}}<div class="card tile {{if .SSH.Flagged}}bad{{else if gt .SSH.Day.Failed 200}}warn{{else}}ok{{end}}"><div class="mute">{{icon "terminal"}} SSH failures, 24 h</div><div class="big">{{.SSH.Day.Failed}}</div><div class="mute">from {{.SSH.Day.IPs}} address{{if ne .SSH.Day.IPs 1}}es{{end}}{{if .SSH.Flagged}} · {{len .SSH.Flagged}} login{{if gt (len .SSH.Flagged) 1}}s{{end}} after many failures{{end}}</div></div>{{end}}
+<div class="card tile {{if gt .LoginDay.Blocked 0}}warn{{else}}ok{{end}}"><div class="mute">{{icon "log-out"}} Berth sign-in failures, 24 h</div><div class="big">{{.LoginDay.Failed}}</div><div class="mute">from {{.LoginDay.IPs}} address{{if ne .LoginDay.IPs 1}}es{{end}} · {{.LoginDay.Blocked}} locked out</div></div>
+</div>
+
+<div class="card"><h2>{{icon "terminal"}}Break-in attempts</h2>
+{{with .SSH}}
+<h3 class="subhead">SSH <span class="mute" style="font-weight:400">{{.Source}}{{if not .At.IsZero}} · read {{.At.Format "15:04"}}{{end}}</span></h3>
+{{if .Error}}<p class="alert warn">{{icon "triangle-alert"}}<span>{{.Error}}</span></p>{{else}}
+<p>Last 24 hours: <strong>{{.Day.Failed}}</strong> failed attempt{{if ne .Day.Failed 1}}s{{end}} from {{.Day.IPs}} address{{if ne .Day.IPs 1}}es{{end}}, {{.Day.Users}} different user name{{if ne .Day.Users 1}}s{{end}}{{if .Day.Root}}, {{.Day.Root}} as <code>root</code>{{end}}.
+Last 7 days: <strong>{{.Week.Failed}}</strong> from {{.Week.IPs}} address{{if ne .Week.IPs 1}}es{{end}}.</p>
+{{range .Flagged}}<p class="alert bad">{{icon "triangle-alert"}}<span><strong>{{.User}}</strong> logged in from <code>{{.IP}}</code> at {{.At.Format "2006-01-02 15:04"}} after {{.Failed}} failed attempts from the same address in the day before. If that was not you, change the password and look at what the account did.</span></p>{{end}}
+{{range .Config.Problems}}<p class="alert warn">{{icon "triangle-alert"}}<span>{{.}}</span></p>{{end}}
+<p class="row" style="gap:8px;margin:6px 0">{{if eq .Fail2ban "active"}}<span class="badge ok">fail2ban is running</span><span class="mute">it bans addresses that keep failing</span>{{else}}<span class="badge warn">fail2ban: {{.Fail2ban}}</span><span class="mute">a tool such as fail2ban bans an address after repeated failures</span>{{end}}
+<span class="mute">· SSH port {{.Config.Port}}, password login {{.Config.PasswordAuth}}, root login {{.Config.RootLogin}}</span></p>
+{{if .Week.TopIPs}}<div class="grid charts"><div><table><tr><th>Address (7 days)</th><th>Failed</th><th>User names</th><th>Last</th></tr>{{range .Week.TopIPs}}<tr><td><code>{{.IP}}</code></td><td>{{.Failed}}</td><td>{{.Users}}</td><td class="mute">{{.Last.Format "01-02 15:04"}}</td></tr>{{end}}</table></div>
+<div><table><tr><th>User name tried (7 days)</th><th>Times</th></tr>{{range .Week.TopUsers}}<tr><td><code>{{.User}}</code></td><td>{{.Count}}</td></tr>{{end}}</table></div></div>{{else}}<p class="mute">No failed attempts in the last 7 days.</p>{{end}}
+{{if .Logins}}<table><tr><th>Recent successful logins</th><th>From</th><th>How</th></tr>{{range .Logins}}<tr><td>{{.At.Format "2006-01-02 15:04"}} · <strong>{{.User}}</strong></td><td><code>{{.IP}}</code></td><td>{{.Method}}</td></tr>{{end}}</table><p class="mute">If you do not recognise a login above, treat it as a break-in.</p>{{end}}
+{{end}}
+{{else}}<p class="mute">The SSH log has not been read yet (it is read every 5 minutes).</p>{{end}}
+
+<h3 class="subhead">Berth sign-ins</h3>
+<p>Last 24 hours: <strong>{{.LoginDay.Failed}}</strong> failed sign-in{{if ne .LoginDay.Failed 1}}s{{end}} from {{.LoginDay.IPs}} address{{if ne .LoginDay.IPs 1}}es{{end}}, {{.LoginDay.Blocked}} refused because of too many attempts. Last 7 days: <strong>{{.LoginWeek.Failed}}</strong> failed.</p>
+{{if .LoginWeek.TopIPs}}<table><tr><th>Address (7 days)</th><th>Attempts</th><th>User names</th><th>Last</th></tr>{{range .LoginWeek.TopIPs}}<tr><td><code>{{.IP}}</code></td><td>{{.Count}}</td><td>{{.Users}}</td><td class="mute">{{.Last.Format "01-02 15:04"}}</td></tr>{{end}}</table>
+<p class="mute">Addresses come from Cloudflare's header, so they are the visitor's, not Cloudflare's. After 5 failures for one user name Berth refuses that name for 10 minutes. Every attempt is also in the Audit page.</p>{{else}}<p class="mute">No failed sign-ins in the last 7 days.</p>{{end}}
+</div>
+
+{{range .Apps}}<details class="card secapp" {{if or .Vulns .Issues .Tracked .History}}open{{end}}>
+<summary><strong>{{.Name}}</strong>
+{{if not .Scanned}}<span class="badge">not scanned yet</span>{{else}}
+{{if .Vulns}}<span class="badge warn">{{.Vulns}} vulnerable package{{if gt .Vulns 1}}s{{end}}</span>{{end}}
+{{if .High}}<span class="badge failed">{{.High}} serious container issue{{if gt .High 1}}s{{end}}</span>{{else if .Issues}}<span class="badge warn">{{.Issues}} container issue{{if gt .Issues 1}}s{{end}}</span>{{end}}
+{{if .Tracked}}<span class="badge failed">{{.Tracked}} secret file{{if gt .Tracked 1}}s{{end}} in repo</span>{{end}}{{if .History}}<span class="badge warn">{{.History}} in history</span>{{end}}
+{{if not (or .Vulns .Issues .Tracked .History)}}<span class="badge ok">nothing found</span>{{end}}{{end}}</summary>
+{{if .Scanned}}
+<h3>{{icon "box"}}Go packages</h3>
+{{if .Scan.VulnError}}<p class="alert warn">{{icon "triangle-alert"}}<span>Could not check: {{.Scan.VulnError}}</span></p>
+{{else if not .Scan.GoMods}}<p class="mute">No Go code found in this app.</p>
+{{else}}{{range .Scan.GoMods}}<p class="mute" style="margin:6px 0"><code>{{.GoMod}}</code> · {{.Modules}} packages · {{if .Findings}}{{len .Findings}} with known vulnerabilities{{else}}none with a known vulnerability{{end}}</p>
+{{if .Findings}}<table><tr><th>Package</th><th>Version</th><th>Known issues</th><th>Update to</th></tr>
+{{range .Findings}}<tr><td><code>{{.Module}}</code>{{if .Indirect}} <span class="badge">indirect</span>{{end}}</td><td>{{.Version}}</td>
+<td><details><summary>{{len .Vulns}} vulnerabilit{{if eq (len .Vulns) 1}}y{{else}}ies{{end}}</summary><ul class="vulns">{{range .Vulns}}<li><a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.ID}}</a>{{range .Aliases}} <span class="mute">{{.}}</span>{{end}}: {{.Summary}}{{if .Fixed}} <span class="mute">(fixed in {{.Fixed}})</span>{{else}} <span class="badge warn">no fix yet</span>{{end}}</li>{{end}}</ul></details></td>
+<td>{{if .UpdateTo}}<code>{{.UpdateTo}}</code>{{if .NoFix}} <span class="mute">+ {{.NoFix}} without a fix</span>{{end}}{{else}}<span class="mute">no fix yet</span>{{end}}</td></tr>{{end}}</table>{{end}}{{end}}{{end}}
+
+<h3>{{icon "server"}}Containers{{if .Scan.ContainerCount}} <span class="mute" style="font-weight:400">{{.Scan.ContainerCount}} running</span>{{end}}</h3>
+{{if .Scan.ContainerError}}<p class="alert warn">{{icon "triangle-alert"}}<span>Could not check: {{.Scan.ContainerError}}</span></p>
+{{else if not .Scan.ContainerCount}}<p class="mute">No running containers for this app.</p>
+{{else if not .Scan.Containers}}<p class="mute">No risky settings found.</p>
+{{else}}<table><tr><th>Level</th><th>Container</th><th>Issue</th></tr>{{range .Scan.Containers}}<tr><td><span class="badge {{if eq .Severity "high"}}failed{{else if eq .Severity "medium"}}warn{{end}}">{{.Severity}}</span></td><td><code>{{.Container}}</code></td><td><strong>{{.Title}}</strong><br><span class="mute">{{.Detail}}</span></td></tr>{{end}}</table>{{end}}
+
+<h3>{{icon "key-round"}}Secrets in the repository</h3>
+{{if .Scan.SecretError}}<p class="alert warn">{{icon "triangle-alert"}}<span>Could not check: {{.Scan.SecretError}}</span></p>
+{{else if not .Scan.Secrets}}<p class="mute">No file names that look like secrets.</p>
+{{else}}<table><tr><th>File</th><th>Why it looks like a secret</th><th>Where</th></tr>{{range .Scan.Secrets}}<tr><td><code>{{.Path}}</code></td><td>{{.Reason}}</td><td>{{if .Tracked}}<span class="badge failed">in the repository</span>{{else}}<span class="badge warn">removed, still in history</span>{{end}}</td></tr>{{end}}</table>
+<p class="mute">Anything that was ever committed should be treated as leaked: change the password or key it held. Removing the file does not remove it from the git history. Only file names are shown, never contents.</p>{{end}}
+{{end}}</details>
+{{else}}<div class="card mute">No apps yet.</div>{{end}}
+{{end}}

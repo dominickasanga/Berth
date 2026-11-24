@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="{{base}}/static/app.css?v={{v}}">
 </head><body>
 <header><a class="brand" href="{{base}}/"><img src="{{base}}/static/logo.svg?v={{v}}" alt="">Berth</a>
-{{with .}}{{if .User}}<nav aria-label="Main"><a href="{{base}}/overview">{{icon "activity"}}<span>Overview</span></a><a href="{{base}}/">{{icon "layout-grid"}}<span>Apps</span></a><a href="{{base}}/services">{{icon "database"}}<span>Services</span></a><a href="{{base}}/discover">{{icon "search"}}<span>Discover</span></a><a href="{{base}}/audit">{{icon "history"}}<span>Audit</span></a><a href="{{base}}/logs">{{icon "scroll-text"}}<span>Logs</span></a></nav>{{end}}{{end}}
+{{with .}}{{if .User}}<nav aria-label="Main"><a href="{{base}}/overview">{{icon "activity"}}<span>Overview</span></a><a href="{{base}}/">{{icon "layout-grid"}}<span>Apps</span></a><a href="{{base}}/services">{{icon "database"}}<span>Services</span></a><a href="{{base}}/discover">{{icon "search"}}<span>Discover</span></a><a href="{{base}}/security">{{icon "shield-alert"}}<span>Security</span></a><a href="{{base}}/audit">{{icon "history"}}<span>Audit</span></a><a href="{{base}}/logs">{{icon "scroll-text"}}<span>Logs</span></a></nav>{{end}}{{end}}
 <span class="sp"></span>
 <button type="button" class="plain" id="theme-toggle" aria-label="Switch between light and dark mode"><span class="i-moon">{{icon "moon"}}</span><span class="i-sun">{{icon "sun"}}</span></button>
 {{with .}}{{if .User}}<span class="user">{{icon "circle-dot"}}<span>{{.User}}</span></span><form method="post" action="{{base}}/logout"><button class="plain">{{icon "log-out"}}Log out</button></form>{{end}}{{end}}

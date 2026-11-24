@@ -163,3 +163,11 @@ body.term-full{overflow:hidden}
 .tile.bad .big{color:var(--bad)}.tile.warn .big{color:var(--warn)}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--mute);margin-right:4px}
 .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+
+/* Security page */
+.secapp>summary{cursor:pointer;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.secapp h3{display:flex;align-items:center;gap:6px;margin:16px 0 6px;font-size:15px}
+.secapp table{margin-bottom:8px}
+.vulns{margin:6px 0 0;padding-left:18px}.vulns li{margin:3px 0}
+.info-note{border-left:4px solid var(--sky)}
+.subhead{margin:14px 0 6px;font-size:15px}

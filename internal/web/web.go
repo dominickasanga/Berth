@@ -28,6 +28,7 @@ import (
 	"github.com/dominickasanga/berth/internal/discover"
 	"github.com/dominickasanga/berth/internal/logs"
 	"github.com/dominickasanga/berth/internal/monitor"
+	"github.com/dominickasanga/berth/internal/security"
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
@@ -55,6 +56,10 @@ type Server struct {
 	// Sampler checks the supporting services; MailOn says whether alert emails are configured.
 	Sampler *monitor.Sampler
 	MailOn  bool
+	// Security scans the apps for vulnerable packages, risky containers and committed secrets.
+	Security *security.Runner
+	// Access keeps the latest SSH report (failed attempts, logins) for the Security page.
+	Access *security.AccessWatcher
 	// Version is shown in the page footer so you can see which build is running.
 	Version string
 	// RequestLog is "quiet" (default), "all" or "off": see logRequests.
@@ -66,6 +71,9 @@ type Server struct {
 	dummyHash []byte
 	mu        sync.Mutex
 	fails     map[string]*failState
+	// failed sign-ins recorded in the last minute: the audit trail must not become a way to fill the database
+	auditFailAt time.Time
+	auditFailN  int
 }
 
 type failState struct {
@@ -117,6 +125,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /{$}", s.auth(s.appsPage))
 	mux.HandleFunc("GET /overview", s.auth(s.overviewPage))
+	mux.HandleFunc("GET /security", s.auth(s.securityPage))
+	mux.HandleFunc("POST /security/scan", s.auth(s.securityScan))
 	mux.HandleFunc("GET /services", s.auth(s.servicesPage))
 	mux.HandleFunc("GET /services/new", s.auth(s.serviceNewPage))
 	mux.HandleFunc("POST /services", s.auth(s.serviceCreate))
@@ -317,12 +327,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	user := strings.TrimSpace(r.FormValue("username"))
 	fail := func() {
 		log.Printf("login failed: user=%q ip=%s", user, r.RemoteAddr)
+		s.auditLoginFailure(r, user, "login.failed")
 		s.noteFail(user)
 		w.WriteHeader(http.StatusUnauthorized)
 		s.render(w, "login", map[string]string{"Error": "Wrong username, password or code."})
 	}
 	if s.tooManyFails(user) {
 		log.Printf("login refused (too many attempts): user=%q ip=%s", user, r.RemoteAddr)
+		s.auditLoginFailure(r, user, "login.blocked")
 		w.WriteHeader(http.StatusTooManyRequests)
 		s.render(w, "login", map[string]string{"Error": "Too many attempts. Try again in 10 minutes."})
 		return

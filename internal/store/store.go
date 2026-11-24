@@ -403,3 +403,41 @@ func (s *Store) ListAudit(ctx context.Context, limit int, before int64) ([]Audit
 	}
 	return out, rows.Err()
 }
+
+// LoginIP is one address that failed to sign in to Berth.
+type LoginIP struct {
+	IP    string
+	Count int
+	Users int // different user names tried from it
+	Last  time.Time
+}
+
+// LoginFailureStats sums up failed and refused Berth sign-ins since a time.
+type LoginFailureStats struct {
+	Failed, Blocked, IPs int
+	TopIPs               []LoginIP
+}
+
+// LoginFailures reads the failed sign-ins recorded in the audit trail (action login.failed / login.blocked).
+func (s *Store) LoginFailures(ctx context.Context, since time.Time) (LoginFailureStats, error) {
+	var st LoginFailureStats
+	err := s.Pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE action='login.failed'), count(*) FILTER (WHERE action='login.blocked'), count(DISTINCT target)
+		FROM audit_log WHERE action IN ('login.failed','login.blocked') AND at >= $1`, since).Scan(&st.Failed, &st.Blocked, &st.IPs)
+	if err != nil {
+		return st, err
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT target, count(*), count(DISTINCT who), max(at) FROM audit_log
+		WHERE action IN ('login.failed','login.blocked') AND at >= $1 GROUP BY target ORDER BY count(*) DESC, target LIMIT 10`, since)
+	if err != nil {
+		return st, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ip LoginIP
+		if err := rows.Scan(&ip.IP, &ip.Count, &ip.Users, &ip.Last); err != nil {
+			return st, err
+		}
+		st.TopIPs = append(st.TopIPs, ip)
+	}
+	return st, rows.Err()
+}

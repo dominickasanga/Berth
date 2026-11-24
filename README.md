@@ -277,6 +277,7 @@ go build -o berth ./cmd/berth
 | `BERTH_METRICS_RETENTION_DAYS` | `7` | how long samples are kept |
 | `BERTH_SMTP_HOST`, `BERTH_SMTP_PORT` (587), `BERTH_SMTP_USER`, `BERTH_SMTP_PASS`, `BERTH_SMTP_FROM`, `BERTH_ALERT_TO` | unset | alert email. Both host and `BERTH_ALERT_TO` (comma-separated) are needed. STARTTLS is used when offered; port 465 uses TLS. Without them alerts are shown on the Services page only |
 | `BERTH_ALERT_URL`, `BERTH_ALERT_TO`, `BERTH_ALERT_BRAND`, `BERTH_ALERT_FROM_NAME` (`Berth`) | unset | alert email through GopherPost instead of SMTP: `BERTH_ALERT_URL` is its send-email endpoint (`http://127.0.0.1:8787/api55/v65/send-email`), `BERTH_ALERT_TO` the recipients. GopherPost sends non-`linmalawi.org` recipients (Gmail included) through Brevo. `BERTH_ALERT_BRAND=kite360` sends as `noreply@kite360.live` (verified in Brevo with DKIM and DMARC) with Kite360 branding; empty uses GopherPost's default sender and branding. Takes priority over the SMTP variables |
+| `BERTH_AUTH_LOG` | `/var/log/auth.log` | the SSH log the Security page reads for failed logins (its rotated `.1` file is read too) |
 | `BERTH_PUBLIC_URL` | unset | base URL (including the prefix) used for links in alert emails |
 | `BERTH_REQUEST_LOG` | `quiet` | request log: `quiet` (default), `all` or `off`; see section 11 |
 | `BERTH_LOG_FILE` | `<data dir>/logs/berth.log` | Berth's own log file; set to an empty string to turn the file off |
@@ -533,6 +534,47 @@ password if it listens on loopback only.
 **Not built yet:** metrics for the apps' own containers (CPU, memory, restarts) and the Docker
 engine, and the managed-service actions (create a database and user, backups, restore, flush,
 prune). Monitoring is read-only.
+
+### Security page (`/_berth/security`)
+
+Berth scans every registered app once a day (the first scan runs two minutes after start; **Scan now**
+runs one on demand) and shows the result per app. It only reads: nothing is changed, and secret values
+are never read into a result.
+
+- **Go packages:** each `go.mod` of the app (the folder itself and up to two levels down, so Kite360's
+  `go-api/go.mod` is found) is compared with the public Go vulnerability database. A package is listed
+  when the version in use falls in an affected range, with the vulnerability ids (CVE/GHSA), a summary,
+  the version that fixes it and, per package, the version to update to. The comparison happens on this
+  server: only `https://vuln.go.dev/index/modules.json` (the same file for everyone) and the entries of
+  matching vulnerabilities are downloaded, so the list of packages is not sent anywhere. A listed
+  package uses a version with a published vulnerability, which is a reason to update; it does not prove
+  the code calls the flaw (that needs `govulncheck`). The Go standard library and npm packages are not checked yet.
+- **Containers:** the running containers of the app (`docker ps`, `inspect`) are checked for: privileged
+  mode and a mounted Docker socket (high), extra capabilities such as `SYS_ADMIN` (high) and shared
+  process list (high), the host network and running as root (medium), ports published on all interfaces,
+  and images built more than 180 days ago (low).
+- **Secrets in the repository:** the files git tracks, and every file name that was ever committed, are
+  matched for `.env*` (not `.env.example`), `*.bak`, private keys and certificate bundles,
+  `cookies.txt`, `.npmrc`/`.netrc`/`.pgpass`, database dumps and SQLite files, and tracked JSON files that
+  hold a service account key. Files still in the repository are red, files removed but still in the git
+  history are amber: anything ever committed should be treated as leaked and rotated, because removing
+  the file does not remove it from the history. Only names are shown.
+- **Break-in attempts** (refreshed every 5 minutes, not daily):
+  - **SSH:** the SSH log (`/var/log/auth.log` and the rotated `.1`, or `BERTH_AUTH_LOG`) is read for failed
+    passwords and invalid user names. It shows the failures of the last 24 hours and 7 days, the
+    addresses and user names behind them, attempts as `root`, and the recent successful logins, so you can
+    see whether each one was you. A **login that followed 5 or more failures from the same address** within
+    the day before is flagged in red: that is what a guessed password looks like. It also reads `sshd`'s settings
+    (`/etc/ssh/sshd_config` and `sshd_config.d`) and warns when password login or root login is on, and shows
+    whether `fail2ban` is running. Berth's user must be able to read the log: on Ubuntu add it to the `adm`
+    group (`sudo usermod -aG adm <user>`, then restart Berth); the page says so when it cannot. Addresses
+    are only counted and shown: none is looked up or sent anywhere.
+  - **Berth sign-ins:** every failed or refused sign-in is now written to the audit trail (`login.failed`,
+    `login.blocked`) with the visitor's address (from Cloudflare's `CF-Connecting-IP` header, else the
+    first forwarded address, else the connection's), and summarised by address. At most 20 are recorded per
+    minute, so an attack cannot fill the database; the log file still has every one.
+- A check that cannot run (folder missing, no `git`, Docker not reachable, the database unreachable)
+  says so instead of showing "nothing found".
 
 ## 13. Updating Berth on the server
 

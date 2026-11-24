@@ -95,6 +95,10 @@ func (e *Engine) checkoutDir(a store.App) string {
 	}
 	return filepath.Join(e.DataDir, "checkouts", a.Name)
 }
+
+// CheckoutDir is where the app's source is: the folder the Security scan reads.
+func (e *Engine) CheckoutDir(a store.App) string { return e.checkoutDir(a) }
+
 func (e *Engine) envFile(a store.App) string { return filepath.Join(e.DataDir, "env", a.Name+".env") }
 
 func (e *Engine) compose(a store.App, args ...string) *exec.Cmd {

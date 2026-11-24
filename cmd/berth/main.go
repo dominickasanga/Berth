@@ -23,6 +23,7 @@ import (
 	"github.com/dominickasanga/berth/internal/deploy"
 	"github.com/dominickasanga/berth/internal/logs"
 	"github.com/dominickasanga/berth/internal/monitor"
+	"github.com/dominickasanga/berth/internal/security"
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/dominickasanga/berth/internal/web"
 	"github.com/pquerna/otp/totp"
@@ -220,6 +221,10 @@ func main() {
 		srv.Sampler = &monitor.Sampler{Store: st, Box: box, Mail: mail, ProjectName: deploy.ProjectName, Interval: time.Duration(interval) * time.Second,
 			Retention: time.Duration(retention) * 24 * time.Hour, PublicURL: strings.TrimRight(os.Getenv("BERTH_PUBLIC_URL"), "/")}
 		srv.MailOn = mail != nil
+		srv.Security = &security.Runner{Store: st, Dir: srv.Deploy.CheckoutDir, ProjectName: deploy.ProjectName, Vuln: &security.VulnChecker{}}
+		go srv.Security.Run(ctx)
+		srv.Access = &security.AccessWatcher{AuthLog: os.Getenv("BERTH_AUTH_LOG")}
+		go srv.Access.Run(ctx)
 		go srv.Sampler.Run(ctx)
 		log.Printf("monitoring services every %ds, keeping %d days; alert email %s", interval, retention, map[bool]string{true: "on", false: "off (set BERTH_SMTP_HOST and BERTH_ALERT_TO)"}[mail != nil])
 		h, err := srv.Handler()

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,7 @@ import (
 	"github.com/dominickasanga/berth/internal/deploy"
 	"github.com/dominickasanga/berth/internal/logs"
 	"github.com/dominickasanga/berth/internal/monitor"
+	"github.com/dominickasanga/berth/internal/security"
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp/totp"
@@ -1243,5 +1245,156 @@ func TestOverviewPage(t *testing.T) {
 	}
 	if !strings.Contains(get("/"), `href="/overview"`) {
 		t.Errorf("no Overview item in the menu")
+	}
+}
+
+func TestSecurityPage(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	ctx := context.Background()
+	c := client()
+	get := func(path string) (int, string) {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.AddCookie(cookie)
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	if r, _ := c.Get(ts.URL + "/security"); r.StatusCode != 303 {
+		t.Fatalf("the Security page needs a login, got %d", r.StatusCode)
+	}
+	srv.Store.CreateApp(ctx, store.App{Name: "clean", RepoURL: "r", Branch: "main", ComposeFile: "c.yml"})
+	srv.Store.CreateApp(ctx, store.App{Name: "risky", RepoURL: "r", Branch: "main", ComposeFile: "c.yml"})
+	srv.Store.CreateApp(ctx, store.App{Name: "new", RepoURL: "r", Branch: "main", ComposeFile: "c.yml"})
+	if _, page := get("/security"); !strings.Contains(page, "not scanned yet") || !strings.Contains(page, "first scan runs") {
+		t.Fatal("before the first scan the page says so")
+	}
+	save := func(app string, scan security.AppScan) {
+		scan.App, scan.At = app, time.Now()
+		b, _ := json.Marshal(scan)
+		if err := srv.Store.SaveSecurityScan(ctx, app, b, scan.At); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("clean", security.AppScan{GoMods: []security.VulnResult{{GoMod: "go.mod", Modules: 20}}, ContainerCount: 1})
+	save("risky", security.AppScan{
+		GoMods: []security.VulnResult{{GoMod: "go-api/go.mod", Modules: 95, Findings: []security.VulnFinding{{Module: "github.com/jackc/pgx/v5", Version: "v5.7.5",
+			Vulns: []security.Vuln{{ID: "GO-2026-5004", Summary: "SQL Injection via placeholder confusion", Fixed: "5.9.2", URL: "https://pkg.go.dev/vuln/GO-2026-5004", Aliases: []string{"CVE-2026-1"}},
+				{ID: "GO-2026-9999", Summary: "Not fixed yet", URL: "https://pkg.go.dev/vuln/GO-2026-9999"}}}}}},
+		ContainerCount: 2,
+		Containers:     []security.ContainerIssue{{Container: "berth-risky-api-1", Severity: "high", Title: "Runs privileged", Detail: "full access"}, {Container: "berth-risky-api-1", Severity: "medium", Title: "Runs as root", Detail: "d"}},
+		Secrets:        []security.SecretFile{{Path: "go-api/.env.local.bak", Reason: "environment file", Tracked: true}, {Path: "old/.env", Reason: "environment file", Tracked: false}},
+	})
+	code, page := get("/security")
+	if code != 200 {
+		t.Fatalf("page: %d", code)
+	}
+	for _, want := range []string{"github.com/jackc/pgx/v5", "v5.7.5", "GO-2026-5004", "CVE-2026-1", "5.9.2", "no fix yet", // packages: what, why, what to update to
+		"Runs privileged", "berth-risky-api-1", "serious", // containers
+		"go-api/.env.local.bak", "in the repository", "removed, still in history", // secrets
+		"1 vulnerable package", "nothing found", "not scanned yet", "no known"} { // summaries and the honest wording
+		if !strings.Contains(page, want) {
+			t.Errorf("security page is missing %q", want)
+		}
+	}
+	if strings.Index(page, ">risky<") > strings.Index(page, ">clean<") {
+		t.Error("the app with the most findings comes first")
+	}
+	if strings.Contains(page, "never-shown") || strings.Contains(page, "PASSWORD=") {
+		t.Error("only file names, never contents")
+	}
+	// the menu has the item, and scanning needs a login and a runner
+	if _, home := get("/"); !strings.Contains(home, `href="/security"`) {
+		t.Error("no Security item in the menu")
+	}
+	req, _ := http.NewRequest("POST", ts.URL+"/security/scan", nil)
+	req.AddCookie(cookie)
+	if r, _ := c.Do(req); r.StatusCode != 404 { // no runner in this test server
+		t.Errorf("without a runner the scan is not available, got %d", r.StatusCode)
+	}
+}
+
+func TestBreakInAttemptsOnTheSecurityPage(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	ctx := context.Background()
+	c := client()
+	attempt := func(user, ip string) int {
+		req, _ := http.NewRequest("POST", ts.URL+"/login", strings.NewReader(url.Values{"username": {user}, "password": {"wrong"}, "code": {"000000"}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if ip != "" {
+			req.Header.Set("CF-Connecting-IP", ip)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.StatusCode
+	}
+	// one user name guessed six times: five failures, then the lock-out refuses the sixth
+	for i := 0; i < 6; i++ {
+		attempt("mallory", "198.51.100.77")
+	}
+	day, err := srv.Store.LoginFailures(ctx, time.Now().Add(-time.Hour))
+	if err != nil || day.Failed != 5 || day.Blocked != 1 || day.IPs != 1 || len(day.TopIPs) != 1 || day.TopIPs[0].IP != "198.51.100.77" || day.TopIPs[0].Count != 6 || day.TopIPs[0].Users != 1 {
+		t.Fatalf("failed sign-ins are recorded with the visitor's address from Cloudflare's header: %+v %v", day, err)
+	}
+	// an attack with a new name every time cannot flood the audit trail
+	for i := 0; i < 40; i++ {
+		attempt("bot"+strconv.Itoa(i), "203.0.113.200")
+	}
+	all, _ := srv.Store.LoginFailures(ctx, time.Now().Add(-time.Hour))
+	if all.Failed+all.Blocked > 20 {
+		t.Fatalf("at most 20 failed sign-ins are recorded a minute, got %d", all.Failed+all.Blocked)
+	}
+	// without the header the connection's own address is used
+	var n int
+	srv.Store.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='login.failed' AND target='127.0.0.1'`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("the proxy header was ignored: %d", n)
+	}
+
+	// the SSH report
+	dir := t.TempDir()
+	now := time.Now()
+	line := func(min int, msg string) string {
+		return now.Add(-time.Duration(min)*time.Minute).Format("Jan _2 15:04:05") + " erp sshd[1]: " + msg + "\n"
+	}
+	var log strings.Builder
+	for i := 0; i < 6; i++ {
+		log.WriteString(line(50-i, "Failed password for invalid user admin from 203.0.113.9 port 10 ssh2"))
+	}
+	log.WriteString(line(20, "Accepted password for ubuntu from 203.0.113.9 port 11 ssh2"))
+	os.WriteFile(filepath.Join(dir, "auth.log"), []byte(log.String()), 0o644)
+	os.MkdirAll(filepath.Join(dir, "ssh"), 0o755)
+	os.WriteFile(filepath.Join(dir, "ssh", "sshd_config"), []byte("PasswordAuthentication yes\nPort 22\n"), 0o644)
+	srv.Access = &security.AccessWatcher{AuthLog: filepath.Join(dir, "auth.log"), SSHDir: filepath.Join(dir, "ssh")}
+	srv.Access.Refresh(ctx)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/security", nil)
+	req.AddCookie(cookie)
+	r, err := c.Do(req)
+	if err != nil || r.StatusCode != 200 {
+		t.Fatalf("page: %v %v", err, r)
+	}
+	b, _ := io.ReadAll(r.Body)
+	page := string(b)
+	for _, want := range []string{"Break-in attempts", "203.0.113.9", "6</strong> failed attempts", "from 1 address", "<code>admin</code>",
+		"logged in from <code>203.0.113.9</code>", "after 6 failed attempts", // the login that followed the failures
+		"Password login is on", "fail2ban", "Recent successful logins", "198.51.100.77", "Berth sign-ins", "SSH failures, 24 h"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("security page is missing %q", want)
+		}
+	}
+	// a log Berth cannot read says so instead of showing zeros
+	srv.Access = &security.AccessWatcher{AuthLog: filepath.Join(dir, "missing.log"), SSHDir: dir}
+	srv.Access.Refresh(ctx)
+	req2, _ := http.NewRequest("GET", ts.URL+"/security", nil)
+	req2.AddCookie(cookie)
+	r2, _ := c.Do(req2)
+	b2, _ := io.ReadAll(r2.Body)
+	if !strings.Contains(string(b2), "adm group") {
+		t.Error("an unreadable SSH log is explained")
 	}
 }
