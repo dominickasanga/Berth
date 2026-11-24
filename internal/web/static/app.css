@@ -153,3 +153,13 @@ body.term-full{overflow:hidden}
 .svcnav .count{color:var(--mute);font-size:13px}
 .svcgroup{scroll-margin-top:calc(var(--header-h) + 12px);margin-bottom:8px}
 .grouphead{display:flex;align-items:center;gap:8px;margin:16px 0 8px}
+
+/* Overview: server numbers, app rows */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+.tile{margin:0}.tile .big{font-size:26px;font-weight:700;line-height:1.3}
+.tile .bar{height:6px;border-radius:999px;background:var(--line);overflow:hidden;margin:6px 0}
+.tile .bar span{display:block;height:100%;background:var(--ok)}
+.tile.warn .bar span{background:var(--warn)}.tile.bad .bar span{background:var(--bad)}
+.tile.bad .big{color:var(--bad)}.tile.warn .big{color:var(--warn)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--mute);margin-right:4px}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}

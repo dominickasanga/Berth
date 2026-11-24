@@ -116,6 +116,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /{$}", s.auth(s.appsPage))
+	mux.HandleFunc("GET /overview", s.auth(s.overviewPage))
 	mux.HandleFunc("GET /services", s.auth(s.servicesPage))
 	mux.HandleFunc("GET /services/new", s.auth(s.serviceNewPage))
 	mux.HandleFunc("POST /services", s.auth(s.serviceCreate))
@@ -462,7 +463,7 @@ func (s *Server) appPage(w http.ResponseWriter, r *http.Request, a *store.Admin)
 		}
 		deploys = append(deploys, row)
 	}
-	s.render(w, "app", map[string]any{"User": a.Username, "App": app, "Env": rows, "Deploys": deploys, "Src": s.sourceOptions(r.Context(), *app), "Flash": r.URL.Query().Get("msg"), "Err": r.URL.Query().Get("err")})
+	s.render(w, "app", map[string]any{"User": a.Username, "App": app, "Res": s.appResources(r, app.Name), "Env": rows, "Deploys": deploys, "Src": s.sourceOptions(r.Context(), *app), "Flash": r.URL.Query().Get("msg"), "Err": r.URL.Query().Get("err")})
 }
 
 func (s *Server) appStatus(w http.ResponseWriter, r *http.Request, a *store.Admin) {

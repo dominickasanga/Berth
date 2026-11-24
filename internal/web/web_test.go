@@ -1172,3 +1172,76 @@ func TestServicesPageGroupsAndDeployTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestOverviewPage(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	ctx := context.Background()
+	c := client()
+	get := func(path string) string {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.AddCookie(cookie)
+		r, err := c.Do(req)
+		if err != nil || r.StatusCode != 200 {
+			t.Fatalf("%s: %v %v", path, err, r)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return string(b)
+	}
+	if code := func() int {
+		r, _ := c.Get(ts.URL + "/overview")
+		return r.StatusCode
+	}(); code != 303 {
+		t.Fatalf("the Overview needs a login, got %d", code)
+	}
+	srv.Store.CreateApp(ctx, store.App{Name: "demo", RepoURL: "r", Branch: "main", ComposeFile: "c.yml", Monitor: true})
+	srv.Store.CreateApp(ctx, store.App{Name: "idle", RepoURL: "r", Branch: "main", ComposeFile: "c.yml", Monitor: true})
+	if page := get("/overview"); !strings.Contains(page, "No server numbers yet") || !strings.Contains(page, `href="/apps/demo"`) || !strings.Contains(page, "not measured") {
+		t.Fatalf("before the first check the page explains itself and still lists the apps")
+	}
+
+	// what the sampler would have stored: the server, and the containers of one app
+	now := time.Now()
+	save := func(name, kind string, params map[string]string, latest map[string]float64, info map[string]string, tables []store.Table) int64 {
+		id, err := srv.Store.CreateService(ctx, store.Service{Name: name, Kind: kind, Enabled: true, Params: params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		samples := map[string]float64{"up": 1}
+		for k, v := range latest {
+			samples[k] = v
+		}
+		if err := srv.Store.SaveCheck(ctx, store.ServiceState{ServiceID: id, Up: true, Latest: latest, Info: info, Tables: tables}, samples, now.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	save("server", "system", nil,
+		map[string]float64{"cpu_pct": 37, "mem_pct": 62, "mem_used_bytes": 5 << 30, "disk_pct": 91, "net_rx_bytes_s": 2048, "net_tx_bytes_s": 1024, "load1": 0.5},
+		map[string]string{"cpus": "4", "memory": "8.0 GiB", "uptime": "12d 3h", "disk_worst": "/mnt/blockvolume"},
+		[]store.Table{{Title: "Disks", Columns: []string{"Mount", "Use"}, Rows: [][]string{{"/mnt/blockvolume", "91%"}}}})
+	save("app-demo", "container", map[string]string{"project": "berth-demo"},
+		map[string]float64{"containers_running": 2, "containers_total": 2, "cpu_pct": 12.5, "mem_bytes": 200 << 20, "restarts": 3}, nil, nil)
+	save("app-idle", "container", map[string]string{"project": "berth-idle"}, map[string]float64{"containers_total": 0}, nil, nil)
+	save("probe", "tcp", nil, map[string]float64{"latency_ms": 1}, nil, nil)
+
+	page := get("/overview")
+	for _, want := range []string{"37.0%", "62.0%", "91.0%", "fullest: /mnt/blockvolume", "in 2.0 KiB/s", "out 1.0 KiB/s", "up 12d 3h", "tile bad", // server strip; disk over 90% is red
+		"2/2 running", "12.5%", "200.0 MiB", "not deployed", // apps
+		"Ports and other", "all up", `href="/services#grp-ports"`, // services summary
+		"<svg", "Fullest disk", "Network in"} { // graphs
+		if !strings.Contains(page, want) {
+			t.Errorf("overview is missing %q", want)
+		}
+	}
+	// Berth's own checks are not shown as services, and an app page gets its resources
+	list := get("/services")
+	if strings.Contains(list, ">server<") || strings.Contains(list, "app-demo") || !strings.Contains(list, "probe") {
+		t.Errorf("the Services page lists only the real services")
+	}
+	if app := get("/apps/demo"); !strings.Contains(app, "Resources") || !strings.Contains(app, "2 of 2 containers running") || !strings.Contains(app, "CPU 12.5%") {
+		t.Errorf("app page lacks its resources")
+	}
+	if !strings.Contains(get("/"), `href="/overview"`) {
+		t.Errorf("no Overview item in the menu")
+	}
+}

@@ -98,24 +98,53 @@ func statsFor(kind monitor.KindDef, st *store.ServiceState) []stat {
 	return out
 }
 
+// visibleServices leaves out what Berth measures by itself (the server, the apps' containers): those
+// have their own place on the Overview page.
+func visibleServices(all []store.Service) []store.Service {
+	var out []store.Service
+	for _, v := range all {
+		if d, ok := monitor.Kind(v.Kind); ok && d.Internal {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// seriesCharts draws the named metrics of one service over a span, skipping those with no data yet.
+func (s *Server) seriesCharts(ctx context.Context, serviceID int64, kind string, names []string, span time.Duration) []chartView {
+	now := time.Now()
+	from := now.Add(-span)
+	bucket := span / 150
+	if bucket < 30*time.Second {
+		bucket = 30 * time.Second
+	}
+	var out []chartView
+	for _, name := range names {
+		for _, m := range monitor.MetricsFor(kind) {
+			if m.Name != name {
+				continue
+			}
+			pts, err := s.Store.Series(ctx, serviceID, m.Name, from, int(bucket.Seconds()))
+			if err != nil || len(pts) == 0 {
+				continue
+			}
+			out = append(out, chartView{Title: m.Title, Last: monitor.Format(m.Unit, pts[len(pts)-1].V), SVG: chartSVG(m.Title, pts, m.Unit, from, now, bucket)})
+		}
+	}
+	return out
+}
+
 func (s *Server) servicesPage(w http.ResponseWriter, r *http.Request, a *store.Admin) {
 	ctx := r.Context()
 	services, err := s.Store.ListServices(ctx)
+	services = visibleServices(services)
 	open, err2 := s.Store.OpenAlerts(ctx)
 	if err != nil || err2 != nil {
 		http.Error(w, "server error", 500)
 		return
 	}
-	perService := map[int64]int{}
-	for _, al := range open {
-		perService[al.ServiceID]++
-	}
-	cards := make([]serviceCard, 0, len(services))
-	for _, v := range services {
-		st, _ := s.Store.ServiceState(ctx, v.ID)
-		kd, _ := monitor.Kind(v.Kind)
-		cards = append(cards, serviceCard{Muted: v.Muted(time.Now()), Service: v, Kind: kd, State: st, Stats: statsFor(kd, st), Alerts: perService[v.ID]})
-	}
+	cards := s.buildCards(r, services, open)
 	resolved, _ := s.Store.RecentResolvedAlerts(ctx, 8)
 	have := map[string]bool{}
 	for _, v := range services {

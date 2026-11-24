@@ -20,6 +20,9 @@ type Sampler struct {
 	Interval  time.Duration
 	Retention time.Duration
 	PublicURL string // optional, for links in alert emails
+	// ProjectName gives an app's compose project, which its containers are labelled with.
+	// Nil means "berth-<name>".
+	ProjectName func(store.App) string
 
 	running sync.Map // service id -> struct{}: never run two checks of one service at once
 }
@@ -67,6 +70,7 @@ func (s *Sampler) Run(ctx context.Context) {
 }
 
 func (s *Sampler) CheckAll(ctx context.Context) {
+	s.SyncInternal(ctx)
 	services, err := s.Store.ListServices(ctx)
 	if err != nil {
 		log.Printf("monitor: cannot list services: %v", err)
@@ -202,4 +206,59 @@ func (s *Sampler) notify(ctx context.Context, v store.Service, a store.Alert, re
 		return
 	}
 	s.Store.MarkAlertNotified(ctx, a.ID, resolved)
+}
+
+// InternalName is the name of the internal service that measures an app's containers.
+func InternalName(app string) string { return "app-" + app }
+
+// SyncInternal makes sure Berth measures its own server and the containers of every app that has
+// monitoring on, and stops measuring (and forgets) apps that were removed or switched off.
+func (s *Sampler) SyncInternal(ctx context.Context) {
+	services, err := s.Store.ListServices(ctx)
+	if err != nil {
+		return
+	}
+	have := map[string]store.Service{}
+	for _, v := range services {
+		if d, ok := Kind(v.Kind); ok && d.Internal {
+			have[v.Name] = v
+		}
+	}
+	if SystemSupported() {
+		if _, ok := have["server"]; !ok {
+			if _, err := s.Store.CreateService(ctx, store.Service{Name: "server", Kind: "system", Enabled: true, Params: map[string]string{}}); err != nil {
+				log.Printf("monitor: cannot add the server check: %v", err)
+			}
+		}
+	}
+	apps, err := s.Store.ListApps(ctx)
+	if err != nil {
+		return
+	}
+	want := map[string]bool{"server": true}
+	for _, a := range apps {
+		if !a.Monitor {
+			continue
+		}
+		name, project := InternalName(a.Name), "berth-"+a.Name
+		if s.ProjectName != nil {
+			project = s.ProjectName(a)
+		}
+		want[name] = true
+		cur, ok := have[name]
+		switch {
+		case !ok:
+			if _, err := s.Store.CreateService(ctx, store.Service{Name: name, Kind: "container", Enabled: true, Params: map[string]string{"project": project}}); err != nil {
+				log.Printf("monitor: cannot add the container check of %s: %v", a.Name, err)
+			}
+		case cur.Params["project"] != project:
+			cur.Params = map[string]string{"project": project}
+			s.Store.UpdateService(ctx, cur)
+		}
+	}
+	for name, v := range have {
+		if !want[name] && v.Kind == "container" {
+			s.Store.DeleteService(ctx, v.ID)
+		}
+	}
 }

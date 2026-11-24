@@ -312,3 +312,55 @@ func TestMailerFromEnvAndGopherPost(t *testing.T) {
 		t.Fatal("SMTP still works as before")
 	}
 }
+
+func TestSyncInternalFollowsTheApps(t *testing.T) {
+	s, _, ctx := testSampler(t)
+	s.ProjectName = func(a store.App) string {
+		if a.ComposeProject != "" {
+			return a.ComposeProject
+		}
+		return "berth-" + a.Name
+	}
+	for _, a := range []store.App{
+		{Name: "web", RepoURL: "r", Branch: "main", ComposeFile: "c.yml", Monitor: true},
+		{Name: "adopted", RepoURL: "r", Branch: "main", ComposeFile: "c.yml", Monitor: true, ComposeProject: "old-stack"},
+		{Name: "admin-tool", RepoURL: "r", Branch: "main", ComposeFile: "c.yml", Monitor: false},
+	} {
+		if err := s.Store.CreateApp(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	project := func() map[string]string {
+		out := map[string]string{}
+		list, _ := s.Store.ListServices(ctx)
+		for _, v := range list {
+			if v.Kind == "container" {
+				out[v.Name] = v.Params["project"]
+			}
+		}
+		return out
+	}
+	s.SyncInternal(ctx)
+	s.SyncInternal(ctx) // running it again changes nothing
+	got := project()
+	if len(got) != 2 || got["app-web"] != "berth-web" || got["app-adopted"] != "old-stack" {
+		t.Fatalf("one container check per monitored app, on its compose project: %v", got)
+	}
+	list, _ := s.Store.ListServices(ctx)
+	var servers int
+	for _, v := range list {
+		if v.Kind == "system" {
+			servers++
+		}
+	}
+	if want := map[bool]int{true: 1, false: 0}[SystemSupported()]; servers != want {
+		t.Fatalf("the server check exists only where /proc does: got %d, want %d", servers, want)
+	}
+	// an app is switched off, and another one takes over a compose project
+	s.Store.Pool.Exec(ctx, `UPDATE apps SET monitor=false WHERE name='web'`)
+	s.Store.Pool.Exec(ctx, `UPDATE apps SET compose_project='new-stack' WHERE name='adopted'`)
+	s.SyncInternal(ctx)
+	if got := project(); len(got) != 1 || got["app-adopted"] != "new-stack" {
+		t.Fatalf("switching monitoring off removes the check, a new project is followed: %v", got)
+	}
+}

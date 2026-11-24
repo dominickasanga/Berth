@@ -1,0 +1,24 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><span aria-current="page">Overview</span></nav>{{end}}
+{{define "content"}}
+<div class="row"><h1 style="flex:1">Overview</h1>
+<nav class="ranges" aria-label="Time range">{{range .Ranges}}<a href="{{base}}/overview?range={{.Key}}" {{if eq .Key $.Range}}aria-current="true"{{end}}>{{.Label}}</a>{{end}}</nav></div>
+<p class="mute">Where everything stands: this server, your apps and the services they use. Checked every 30 seconds; graphs cover the range on the right.</p>
+
+{{if .Open}}<div class="card"><h2>{{icon "bell"}}Active alerts</h2><table>{{range .Open}}<tr><td><a href="{{base}}/services/{{.ServiceID}}">{{.ServiceName}}</a></td><td><span class="badge {{if eq .Severity "critical"}}failed{{else}}running{{end}}">{{.Severity}}</span> {{.Message}}</td><td class="mute" style="white-space:nowrap">{{.OpenedAt.Format "2006-01-02 15:04"}}</td></tr>{{end}}</table></div>{{end}}
+
+<h2 class="grouphead">{{icon "server"}}This server{{if .Uptime}} <span class="mute" style="font-weight:400">up {{.Uptime}}</span>{{end}}</h2>
+{{if .Tiles}}<div class="tiles">{{range .Tiles}}<div class="card tile {{.Level}}"><div class="mute">{{icon .Icon}} {{.Title}}</div><div class="big">{{.Value}}</div>{{if .HasPct}}<div class="bar"><span style="width:{{printf "%.0f" .Pct}}%"></span></div>{{end}}<div class="mute">{{.Sub}}</div></div>{{end}}</div>
+<div class="grid charts">{{range .Charts}}<div class="card chart"><div class="row" style="margin-bottom:4px"><strong>{{.Title}}</strong><span style="flex:1"></span><span class="mute">{{.Last}}</span></div>{{.SVG}}</div>{{end}}</div>
+{{with .Disks}}<div class="card"><h2>{{icon "hard-drive"}}{{.Title}}</h2><table><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr>{{range .Rows}}<tr>{{range .}}<td>{{.}}</td>{{end}}</tr>{{end}}</table></div>{{end}}
+{{else}}<div class="card mute">No server numbers yet. They are measured on the Linux server where Berth runs and appear after the first check (within 30 seconds).</div>{{end}}
+
+<h2 class="grouphead">{{icon "box"}}Apps</h2>
+<div class="card"><table><tr><th>App</th><th>Containers</th><th>CPU</th><th>Memory</th><th>Restarts</th><th></th></tr>
+{{range .Apps}}<tr><td><a href="{{base}}/apps/{{.Name}}">{{.Name}}</a></td><td><span class="dot {{.Level}}"></span> {{.Status}}</td><td>{{.CPU}}</td><td>{{.Mem}}</td><td>{{.Restarts}}</td><td>{{if .Alerts}}<span class="badge warn">{{.Alerts}} alert{{if gt .Alerts 1}}s{{end}}</span>{{end}}</td></tr>
+{{else}}<tr><td class="mute">No apps yet.</td></tr>{{end}}</table>
+<p class="mute">CPU is docker's figure: 100% is one full core. Open an app for its graphs.</p></div>
+
+<h2 class="grouphead">{{icon "database"}}Services</h2>
+{{if .Groups}}<div class="svcnav">{{range .Groups}}<a href="{{base}}/services#grp-{{.Key}}">{{icon .Icon}}<span>{{.Title}}</span><span class="count">{{.Total}}</span>{{if .Down}}<span class="badge failed">{{.Down}} down</span>{{else if .Alerts}}<span class="badge warn">{{.Alerts}} alert{{if gt .Alerts 1}}s{{end}}</span>{{else}}<span class="badge ok">all up</span>{{end}}</a>{{end}}</div>
+{{else}}<div class="card mute">No services yet.</div>{{end}}
+{{end}}

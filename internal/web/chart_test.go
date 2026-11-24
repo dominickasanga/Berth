@@ -39,3 +39,14 @@ func TestChartSVG(t *testing.T) {
 		t.Errorf("a single point should draw a dot: %s", one)
 	}
 }
+
+func TestChartAxisLabelsShowTheDateOverADay(t *testing.T) {
+	to := time.Date(2026, 11, 24, 11, 51, 0, 0, time.UTC)
+	pts := []store.Point{{T: to.Add(-time.Hour), V: 1}, {T: to, V: 2}}
+	for span, want := range map[time.Duration]string{time.Hour: "10:51", 24 * time.Hour: "Nov 23 11:51", 7 * 24 * time.Hour: "Nov 17"} {
+		svg := string(chartSVG("x", pts, "count", to.Add(-span), to, time.Minute))
+		if !strings.Contains(svg, ">"+want+"<") {
+			t.Errorf("a %v chart should start with the label %q: %s", span, want, svg[len(svg)-160:])
+		}
+	}
+}

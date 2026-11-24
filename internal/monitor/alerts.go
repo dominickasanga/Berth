@@ -61,6 +61,20 @@ func Conditions(kind string, params map[string]string, r Result, failures int) [
 		if t := Threshold(params, "queue_ready", 10000); t > 0 && m["messages_ready"] > t {
 			add("backlog", "warning", "%.0f messages are waiting in queues (threshold %.0f)", m["messages_ready"], t)
 		}
+	case "system":
+		if t := Threshold(params, "disk_pct", 85); m["disk_pct"] > t {
+			add("disk", "warning", "the disk %s is %.0f%% full (threshold %.0f%%)", r.Info["disk_worst"], m["disk_pct"], t)
+		}
+		if t := Threshold(params, "mem_pct", 90); m["mem_pct"] > t {
+			add("memory", "warning", "memory in use is %.0f%% (threshold %.0f%%)", m["mem_pct"], t)
+		}
+	case "container":
+		if m["containers_restarting"] >= 1 {
+			add("restarting", "critical", "%.0f container(s) keep restarting: the app is crashing at start", m["containers_restarting"])
+		}
+		if m["containers_unhealthy"] >= 1 {
+			add("unhealthy", "warning", "%.0f container(s) fail their health check", m["containers_unhealthy"])
+		}
 	case "http":
 		if t := Threshold(params, "latency_ms", 2000); t > 0 && m["latency_ms"] > t {
 			add("slow", "warning", "responded in %.0f ms (threshold %.0f ms)", m["latency_ms"], t)

@@ -33,6 +33,9 @@ type KindDef struct {
 	Metrics         []MetricDef
 	Card            []string // the metrics shown on the status card
 	CredentialsHelp string
+	// Internal kinds are measured by Berth itself (the server, an app's containers). They are not
+	// offered in the Add service form and are not listed among the services.
+	Internal bool
 }
 
 var upMetric = MetricDef{"up", "Up", "bool"}
@@ -105,6 +108,18 @@ var kinds = map[string]KindDef{
 		Metrics:    []MetricDef{{"latency_ms", "Response time", "ms"}, {"status_code", "Status code", "count"}},
 		Card:       []string{"latency_ms", "status_code"},
 	},
+	"system": {
+		Kind: "system", Label: "Server", Internal: true,
+		Thresholds: []ThresholdDef{{"disk_pct", "Alert when a disk is fuller than", 85, "%"}, {"mem_pct", "Alert when memory in use exceeds", 90, "%"}},
+		Metrics: []MetricDef{{"cpu_pct", "CPU", "pct"}, {"mem_pct", "Memory", "pct"}, {"mem_used_bytes", "Memory used", "bytes"}, {"disk_pct", "Fullest disk", "pct"},
+			{"net_rx_bytes_s", "Network in", "bytes_s"}, {"net_tx_bytes_s", "Network out", "bytes_s"}, {"load1", "Load (1 min)", "count"}},
+		Card: []string{"cpu_pct", "mem_pct", "disk_pct", "load1"},
+	},
+	"container": {
+		Kind: "container", Label: "App containers", Internal: true,
+		Metrics: []MetricDef{{"cpu_pct", "CPU", "pct_core"}, {"mem_bytes", "Memory", "bytes"}, {"restarts", "Restarts", "count"}, {"containers_running", "Containers running", "count"}},
+		Card:    []string{"containers_running", "cpu_pct", "mem_bytes", "restarts"},
+	},
 	"tcp": {
 		Kind: "tcp", Label: "TCP port", NeedsHost: true,
 		CredentialsHelp: "Only checks that the port accepts a connection.",
@@ -119,8 +134,10 @@ func Kind(k string) (KindDef, bool) { d, ok := kinds[k]; return d, ok }
 // KindNames lists the kinds in a stable order.
 func KindNames() []string {
 	out := make([]string, 0, len(kinds))
-	for k := range kinds {
-		out = append(out, k)
+	for k, d := range kinds {
+		if !d.Internal { // Berth's own server and container checks are not something to add by hand
+			out = append(out, k)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -150,6 +167,10 @@ func Format(unit string, v float64) string {
 		return humanBytes(v)
 	case "per_s":
 		return fmt.Sprintf("%.1f/s", v)
+	case "bytes_s":
+		return humanBytes(v) + "/s"
+	case "pct_core": // docker's CPU figure: 100% is one full core, so it can exceed 100
+		return fmt.Sprintf("%.1f%%", v)
 	case "ms":
 		if v < 10 {
 			return fmt.Sprintf("%.1f ms", v)

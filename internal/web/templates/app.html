@@ -24,6 +24,8 @@
 <div class="row"><input type="text" name="key" placeholder="KEY" required style="flex:1"><input type="password" name="value" placeholder="value" autocomplete="off" style="flex:2">
 <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" name="secret" checked> secret</label><button>Save</button></div></form>
 <p class="mute">Saving an existing key replaces it. Changes apply on the next deploy.</p></div>
+{{with .Res}}<div class="card"><h2>{{icon "activity"}}Resources</h2><p class="mute">{{.Summary}}</p>
+{{if .Charts}}<div class="grid charts">{{range .Charts}}<div class="chart"><div class="row" style="margin-bottom:4px"><strong>{{.Title}}</strong><span style="flex:1"></span><span class="mute">{{.Last}}</span></div>{{.SVG}}</div>{{end}}</div>{{end}}</div>{{end}}
 <div class="card logbox" id="logbox"><div class="logbar"><h2>{{icon "terminal"}}Logs</h2>
 <button class="plain" id="logs-latest" hidden>{{icon "arrow-down"}}Latest</button>
 <button class="plain" id="logs-side" hidden>{{icon "panel-right"}}Side panel</button><button class="plain" id="logs-full" hidden>{{icon "maximize"}}Full screen</button><button class="plain" id="logs-dock" hidden>{{icon "minimize"}}Back to page</button>

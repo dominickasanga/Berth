@@ -78,8 +78,11 @@ func chartSVG(title string, pts []store.Point, unit string, from, to time.Time, 
 	flush(len(pts) - 1)
 
 	tf := "15:04"
-	if span > 36*3600 {
+	switch {
+	case span > 36*3600:
 		tf = "Jan 2"
+	case span >= 18*3600: // a day apart would otherwise print the same clock time at both ends
+		tf = "Jan 2 15:04"
 	}
 	last := pts[len(pts)-1]
 	var b strings.Builder

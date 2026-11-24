@@ -5,7 +5,7 @@
 > **Status:** milestones 1 and 2 built (login with 2FA, app registry, env/secrets,
 > git deploy via compose, pre-deploy step, start/stop/restart, status, live
 > container logs, rollback, discovery of expected apps on disk, choice of existing folder or own clone, monitoring of supporting
-> services with graphs and email alerts). Not built yet: metrics for the apps' own containers and the Docker engine, the managed-service actions
+> services with graphs and email alerts). Not built yet: metrics for the Docker engine itself, the managed-service actions
 > (create database/user, backups, restore, flush, prune), Kite360-specific actions. Not yet run
 > against the real Kite360 repos or a real server. This file is the source
 > of truth for the next developer or AI agent picking this up. Read it fully before
@@ -464,6 +464,25 @@ against real PostgreSQL, Redis, MongoDB and RabbitMQ.
 | **MySQL** | reachability and version, from the server greeting (no login needed) |
 | **HTTP / TCP** | status code and response time / connect time, for GopherPost, Gotenberg, the APIs, Traefik and others |
 
+- **Overview** (`/_berth/overview`, first item of the menu): where everything stands in one screen.
+  *This server*: CPU, memory, the fullest disk and network in/out as tiles (amber from 75%, red from
+  90%), five graphs (CPU, memory, fullest disk, network in, network out; 1 hour, 24 hours or 7 days)
+  and a table of every real disk. *Apps*: each app's containers running, CPU, memory and restarts.
+  *Services*: one line per group with how many are down or have alerts. Each app page also has a
+  *Resources* card with its CPU and memory graphs.
+  - Server numbers are read from `/proc` and the disks, so they exist only where Berth runs on Linux
+    (on a Mac the page says so). The disks are found automatically (ext4, xfs, btrfs...; docker's and
+    snap's are left out). CPU is the share of time not idle; memory counts what is really used
+    (`MemTotal - MemAvailable`, so the file cache is not counted); network counts the real network cards,
+    not loopback, `docker0`, `veth*` or `br-*`.
+  - App numbers come from the `docker` CLI for the app's compose project (`docker ps`, `inspect` and
+    `stats`), once per check. CPU is docker's figure, where 100% is one full core. Apps with monitoring
+    off (for example pgAdmin) are not measured. The server and each app are measured as internal
+    services (kinds `server` and `container`): they share the samples, the 7-day history and the alert
+    emails, but are not listed on the Services page and cannot be added or edited by hand.
+  - **Alerts:** a disk more than 85% full, memory in use above 90%, a container that keeps restarting
+    (critical) and a container failing its health check. A stopped app does not alert. The server's
+    thresholds are fixed for now. The pause control is on the service page, which an alert links to.
 - **Groups:** the Services page is sorted into sections with icons and a jump bar at the top:
   Databases and caches (PostgreSQL, MySQL, MongoDB, Redis), Messaging (RabbitMQ), Apps and APIs (HTTP)
   and Ports and other (TCP). A section shows how many of its services are down or have alerts.

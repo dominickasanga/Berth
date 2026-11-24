@@ -56,6 +56,10 @@ func Collector(kind string) CollectFunc {
 		return collectHTTP
 	case "tcp":
 		return collectTCP
+	case "system":
+		return collectSystem
+	case "container":
+		return collectContainers
 	}
 	return nil
 }
