@@ -29,6 +29,51 @@ type serviceCard struct {
 	Muted   bool // alert emails are paused
 }
 
+// serviceGroup is one section of the Services page. A service belongs to the group of its kind.
+type serviceGroup struct {
+	Key, Title, Icon string
+	Kinds            []string
+	Cards            []serviceCard
+	Alerts, Down     int // open alerts, and services that are down, in this group
+}
+
+// serviceGroupDefs is the order of the sections. A kind not listed here lands in the last one.
+var serviceGroupDefs = []serviceGroup{
+	{Key: "databases", Title: "Databases and caches", Icon: "database", Kinds: []string{"postgres", "mysql", "mongo", "redis"}},
+	{Key: "messaging", Title: "Messaging", Icon: "message-square", Kinds: []string{"rabbitmq"}},
+	{Key: "web", Title: "Apps and APIs", Icon: "globe", Kinds: []string{"http"}},
+	{Key: "ports", Title: "Ports and other", Icon: "plug", Kinds: []string{"tcp"}},
+}
+
+// groupServices sorts the cards into their sections (keeping their order) and drops empty sections.
+func groupServices(cards []serviceCard) []serviceGroup {
+	groups := make([]serviceGroup, len(serviceGroupDefs))
+	copy(groups, serviceGroupDefs)
+	for _, c := range cards {
+		i := len(groups) - 1
+		for gi, g := range groups {
+			for _, k := range g.Kinds {
+				if k == c.Service.Kind {
+					i = gi
+				}
+			}
+		}
+		g := &groups[i]
+		g.Cards = append(g.Cards, c)
+		g.Alerts += c.Alerts
+		if c.Service.Enabled && c.State != nil && !c.State.Up {
+			g.Down++
+		}
+	}
+	var out []serviceGroup
+	for _, g := range groups {
+		if len(g.Cards) > 0 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
 func (s *Server) kindDef(kind string) (monitor.KindDef, bool) { return monitor.Kind(kind) }
 
 // stats formats the metrics a kind shows on its card.
@@ -82,7 +127,7 @@ func (s *Server) servicesPage(w http.ResponseWriter, r *http.Request, a *store.A
 			suggested = append(suggested, e)
 		}
 	}
-	s.render(w, "services", map[string]any{"User": a.Username, "Cards": cards, "Open": open, "Resolved": resolved, "Suggested": suggested,
+	s.render(w, "services", map[string]any{"User": a.Username, "Groups": groupServices(cards), "Open": open, "Resolved": resolved, "Suggested": suggested,
 		"MailOn": s.MailOn, "Flash": r.URL.Query().Get("msg"), "Error": r.URL.Query().Get("err")})
 }
 

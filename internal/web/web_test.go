@@ -1060,3 +1060,115 @@ func TestDiscoverOffersExistingFolderForRenamedRepo(t *testing.T) {
 		t.Fatalf("the app should use the folder and the remote that already works there: %+v", app)
 	}
 }
+
+func TestGroupServices(t *testing.T) {
+	card := func(name, kind string, up bool, alerts int) serviceCard {
+		return serviceCard{Service: store.Service{Name: name, Kind: kind, Enabled: true}, State: &store.ServiceState{Up: up}, Alerts: alerts}
+	}
+	groups := groupServices([]serviceCard{
+		card("probe", "tcp", true, 0), card("api", "http", true, 0), card("pg", "postgres", false, 1),
+		card("cache", "redis", true, 0), card("mystery", "something-new", true, 0), card("mq", "rabbitmq", true, 0),
+	})
+	var keys []string
+	for _, g := range groups {
+		keys = append(keys, g.Key)
+	}
+	if got := strings.Join(keys, ","); got != "databases,messaging,web,ports" {
+		t.Fatalf("sections or their order: %s", got)
+	}
+	db, last := groups[0], groups[3]
+	if len(db.Cards) != 2 || db.Cards[0].Service.Name != "pg" || db.Down != 1 || db.Alerts != 1 {
+		t.Errorf("databases and caches share one section, with its problems counted: %+v", db)
+	}
+	if len(last.Cards) != 2 {
+		t.Errorf("an unknown kind belongs in the last section: %+v", last.Cards)
+	}
+	if only := groupServices([]serviceCard{card("api", "http", true, 0)}); len(only) != 1 || only[0].Key != "web" {
+		t.Errorf("empty sections are left out: %+v", only)
+	}
+}
+
+func TestServicesPageGroupsAndDeployTerminal(t *testing.T) {
+	ts, _, srv, cookie := setupLoggedIn(t)
+	ctx := context.Background()
+	for _, v := range []store.Service{
+		{Name: "probe", Kind: "tcp", Host: "127.0.0.1", Port: 9, Enabled: true},
+		{Name: "api", Kind: "http", Enabled: true, Params: map[string]string{"url": "http://127.0.0.1:1/"}},
+		{Name: "mq", Kind: "rabbitmq", Host: "127.0.0.1", Port: 5672, Enabled: true},
+		{Name: "pg", Kind: "postgres", Host: "127.0.0.1", Port: 5432, Enabled: true},
+	} {
+		if _, err := srv.Store.CreateService(ctx, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := client()
+	get := func(path string) string {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.AddCookie(cookie)
+		r, err := c.Do(req)
+		if err != nil || r.StatusCode != 200 {
+			t.Fatalf("%s: %v %v", path, err, r)
+		}
+		b, _ := io.ReadAll(r.Body)
+		return string(b)
+	}
+	page := get("/services")
+	last := -1
+	for _, key := range []string{"databases", "messaging", "web", "ports"} {
+		if !strings.Contains(page, `href="#grp-`+key+`"`) {
+			t.Errorf("no jump link to the %s section", key)
+		}
+		i := strings.Index(page, `id="grp-`+key+`"`)
+		if i < 0 || i < last {
+			t.Fatalf("section %s missing or out of order", key)
+		}
+		last = i
+	}
+	for _, icon := range []string{"#database", "#message-square", "#globe", "#plug"} {
+		if !strings.Contains(page, icon) {
+			t.Errorf("the page does not use the %s icon", icon)
+		}
+	}
+	// every icon the page asks for exists in the sprite
+	sprite := get("/static/icons.svg")
+	for _, id := range []string{"database", "message-square", "globe", "plug", "maximize", "minimize"} {
+		if !strings.Contains(sprite, `id="`+id+`"`) {
+			t.Errorf("icons.svg has no %s", id)
+		}
+	}
+
+	// the deploy output sits in a terminal block with a full screen control outside the refreshed part
+	req, _ := http.NewRequest("POST", ts.URL+"/apps", strings.NewReader(url.Values{"name": {"demo"}, "repo_url": {"https://example.com/r.git"}, "branch": {"main"}, "compose_file": {"docker-compose.yml"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	if r, err := c.Do(req); err != nil || r.StatusCode != 303 {
+		t.Fatalf("create app: %v %v", err, r)
+	}
+	app, _ := srv.Store.AppByName(ctx, "demo")
+	did, err := srv.Store.StartDeploy(ctx, app.ID, "deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appPage := get("/apps/demo")
+	termAt, btnAt, bodyAt := strings.Index(appPage, "data-term>"), strings.Index(appPage, "data-term-full"), strings.Index(appPage, `class="termbody" hx-get="/deploys/`+strconv.FormatInt(did, 10)+`/log"`)
+	if termAt < 0 || btnAt < termAt || bodyAt < btnAt {
+		t.Errorf("deploy terminal: block at %d, full screen button at %d, refreshed part at %d", termAt, btnAt, bodyAt)
+	}
+	// the script and styles carry the pieces the markup relies on, in both themes
+	js, css := get("/static/app.js"), get("/static/app.css")
+	for _, want := range []string{"berthLog", "data-term-full", "'Escape'"} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %s", want)
+		}
+	}
+	for _, want := range []string{".ll-err{color:var(--bad)}", ".ll-warn{color:var(--warn)}", ".ll-ok{color:var(--ok)}", ".term.full{position:fixed"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css lacks %s", want)
+		}
+	}
+	for _, v := range []string{"--bad:", "--warn:", "--ok:"} {
+		if strings.Count(css, v) < 2 {
+			t.Errorf("%s must be defined for both the light and the dark theme", v)
+		}
+	}
+}

@@ -4,6 +4,51 @@ document.addEventListener('submit', function (e) {
   if (msg && !confirm(msg)) e.preventDefault();
 });
 
+// Log colouring. Every log line becomes one <span> whose class says what it is (error, warning,
+// ok, debug, section); the colours come from the theme variables in app.css, so light and dark both
+// work. Text only goes in through textContent, so a log line can never inject markup.
+var berthLog = (function () {
+  var TS = /^(\d{4}[-\/]\d\d[-\/]\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?Z?)(?=\s)/;
+  var ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
+  function kind(line) {
+    if (/^==\s.+\s==$/.test(line)) return 'll-sec';                                   // Berth's "== build =="
+    if (/\b(DEPLOY FAILED|ERROR|FATAL|PANIC|CRITICAL)\b/.test(line) || /\blevel=(error|fatal|panic)\b/i.test(line)) return 'll-err';
+    if (/\b(WARN|WARNING)\b/.test(line) || /\blevel=warn/i.test(line)) return 'll-warn';
+    if (/\bDEPLOY OK\b/.test(line)) return 'll-ok';
+    if (/\b(failed|failure|unhealthy|refused|denied)\b(?!=0\b)/i.test(line)) return 'll-err'; // "failed=0" is not a failure
+    if (/\[GIN-debug\]|\bDEBUG\b/.test(line) || /\blevel=debug/i.test(line)) return 'll-dim';
+    if (/^#\d+ /.test(line)) return 'll-dim';                                         // docker build step noise
+    if (/\b(Healthy|Successfully)\b/.test(line)) return 'll-ok';
+    return '';
+  }
+  function line(text) {
+    text = String(text).replace(ANSI, '');
+    var span = document.createElement('span'), cls = kind(text), m = TS.exec(text);
+    if (cls) span.className = cls;
+    if (m) {
+      var ts = document.createElement('span');
+      ts.className = 'll-ts';
+      ts.textContent = m[1];
+      span.appendChild(ts);
+      span.appendChild(document.createTextNode(text.slice(m[1].length) + '\n'));
+    } else {
+      span.textContent = text + '\n';
+    }
+    return span;
+  }
+  // Re-draw a <pre> that holds plain text (a deploy log) as coloured lines.
+  function paint(pre) {
+    var text = pre.textContent;
+    if (!text) return;
+    var lines = text.split('\n'), frag = document.createDocumentFragment();
+    if (lines[lines.length - 1] === '') lines.pop();
+    lines.forEach(function (l) { frag.appendChild(line(l)); });
+    pre.textContent = '';
+    pre.appendChild(frag);
+  }
+  return { kind: kind, line: line, paint: paint };
+})();
+
 // Live logs over server-sent events, with inline / side panel / full screen views.
 (function () {
   var box = document.getElementById('logbox');
@@ -38,7 +83,7 @@ document.addEventListener('submit', function (e) {
 
   function add(line) {
     var stick = atBottom();
-    pre.appendChild(document.createTextNode(line + '\n')); // append only: never rebuild the text (that resets scroll)
+    pre.appendChild(berthLog.line(line)); // append only: never rebuild the text (that resets scroll)
     while (pre.childNodes.length > MAX) pre.removeChild(pre.firstChild);
     if (stick) toBottom(); else latest.hidden = false;
   }
@@ -81,6 +126,7 @@ document.addEventListener('htmx:beforeSwap', function (e) {
 document.addEventListener('htmx:afterSwap', function (e) {
   var t = e.detail.target, p = t && t.querySelector && t.querySelector('pre');
   if (!p) return;
+  if (t.closest('[data-term]')) berthLog.paint(p); // colour the deploy output
   p.scrollTop = (!t._keep || t._keep.bottom) ? p.scrollHeight : t._keep.top;
 });
 
@@ -115,4 +161,26 @@ document.addEventListener('htmx:afterSwap', function (e) {
     show();
   });
   show();
+})();
+
+// Deploy terminal: a button that takes one deploy's output over the whole window (Escape or the
+// same button to leave). The button sits outside the part htmx re-fetches, so it survives the refresh.
+(function () {
+  function setFull(term, on) {
+    term.classList.toggle('full', on);
+    document.body.classList.toggle('term-full', on);
+    var label = term.querySelector('[data-term-full] .term-label');
+    if (label) label.textContent = on ? 'Exit full screen' : 'Full screen';
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-term-full]');
+    if (!b) return;
+    var term = b.closest('[data-term]');
+    setFull(term, !term.classList.contains('full'));
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    var open = document.querySelector('[data-term].full');
+    if (open) setFull(open, false);
+  });
 })();

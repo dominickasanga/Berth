@@ -48,6 +48,16 @@ apps:
     folder_names: [nyasahub-api-core, nyasahub-api]
     monitor: true
 
+  - name: sb-api
+    title: SB API
+    repo: https://github.com/dominickasanga/SB-API
+    branch: oauth2                      # what production runs today; move to main when oauth2 is merged
+    subfolder: deployments/docker       # the Dockerfile and compose file live here
+    # The API only, on the host network, using the host's Postgres/Redis/Mongo/RabbitMQ.
+    compose_file: docker-compose.prod.yml
+    folder_names: [sb-api]
+    monitor: true
+
   - name: nyasahub-web
     title: NyasaHub web
     repo: https://github.com/dominickasanga/NyasaHub-Web-APP

@@ -34,6 +34,12 @@ services:
     port: 8090
     params: {url: "http://127.0.0.1:8090/health"}
     note: "NyasaHub API health endpoint."
+  - name: sb-api
+    kind: http
+    host: 127.0.0.1
+    port: 8580
+    params: {url: "http://127.0.0.1:8580/health"}
+    note: "SB API health endpoint."
   - name: kite360-web
     kind: http
     host: 127.0.0.1

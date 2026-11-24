@@ -7,8 +7,10 @@
 {{if .Open}}<div class="card"><h2>{{icon "bell"}}Active alerts</h2><table><tr><th>Service</th><th>Problem</th><th>Since</th><th>Emailed</th></tr>
 {{range .Open}}<tr><td><a href="{{base}}/services/{{.ServiceID}}">{{.ServiceName}}</a></td><td><span class="badge {{if eq .Severity "critical"}}failed{{else}}running{{end}}">{{.Severity}}</span> {{.Message}}</td><td class="mute" style="white-space:nowrap">{{.OpenedAt.Format "2006-01-02 15:04"}}</td><td class="mute">{{if .NotifiedAt}}yes{{else if $.MailOn}}pending{{else}}no{{end}}</td></tr>{{end}}</table></div>{{end}}
 
-{{if .Cards}}<div class="grid">{{range .Cards}}<a class="card svc" href="{{base}}/services/{{.Service.ID}}">
-<div class="row" style="margin-bottom:6px"><strong style="font-size:16px">{{.Service.Name}}</strong><span style="flex:1"></span>
+{{if .Groups}}<nav class="svcnav" aria-label="Service groups">{{range .Groups}}<a href="#grp-{{.Key}}">{{icon .Icon}}<span>{{.Title}}</span><span class="count">{{len .Cards}}</span>{{if .Down}}<span class="badge failed">{{.Down}} down</span>{{else if .Alerts}}<span class="badge warn">{{.Alerts}} alert{{if gt .Alerts 1}}s{{end}}</span>{{end}}</a>{{end}}</nav>
+{{range $g := .Groups}}<section class="svcgroup" id="grp-{{$g.Key}}"><h2 class="grouphead">{{icon $g.Icon}}{{$g.Title}} <span class="mute">{{len $g.Cards}}</span></h2>
+<div class="grid">{{range $g.Cards}}<a class="card svc" href="{{base}}/services/{{.Service.ID}}">
+<div class="row" style="margin-bottom:6px"><span class="mute">{{icon $g.Icon}}</span><strong style="font-size:16px">{{.Service.Name}}</strong><span style="flex:1"></span>
 {{if not .Service.Enabled}}<span class="badge">paused</span>{{else if not .State}}<span class="badge">waiting</span>{{else if .State.Up}}<span class="badge ok">Up</span>{{else}}<span class="badge failed">Down</span>{{end}}
 {{if .Muted}}<span class="badge">emails paused</span>{{end}}
 {{if .Alerts}}<span class="badge warn">{{.Alerts}} alert{{if gt .Alerts 1}}s{{end}}</span>{{end}}</div>
@@ -16,7 +18,7 @@
 {{if and .State (not .State.Up)}}<p class="err" style="margin:0 0 6px">{{.State.Error}}</p>{{end}}
 {{if .Stats}}<dl class="stats">{{range .Stats}}<div><dt>{{.Title}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{else if not .State}}<p class="mute">The first check is running…</p>{{end}}
 {{with .State}}{{with .Info.version}}<div class="mute" style="margin-top:6px">version {{.}}</div>{{end}}{{end}}
-</a>{{end}}</div>
+</a>{{end}}</div></section>{{end}}
 {{else}}<div class="card mute">No services yet. Add PostgreSQL, Redis, MongoDB or RabbitMQ to start monitoring them.</div>{{end}}
 
 {{if .Suggested}}<div class="card"><h2>{{icon "server"}}Suggested for this server</h2><p class="mute">Services your apps rely on, taken from what runs on the production server. Adding one opens the form pre-filled.</p>

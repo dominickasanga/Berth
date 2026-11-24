@@ -421,6 +421,12 @@ Live logs use server-sent events, so the proxy must not buffer responses for thi
 
 Three things, all behind the login:
 
+- **Colours:** log lines are coloured by what they say, in the live logs and the deploy output: errors
+  (`ERROR`, `FATAL`, `level=error`, `DEPLOY FAILED`, `failed`, `unhealthy`) red, warnings amber, `DEPLOY OK`,
+  `Healthy` and `Successfully` green, debug and docker build steps grey, `== section ==` headers blue and
+  timestamps dimmed (`failed=0` is not an error). The colours come from the theme, so they follow the
+  light/dark switch. Copying a line gives the original text.
+- **Deploy output** has a **Full screen** button for each deploy (Escape or the same button leaves).
 - **Logs page** (`/_berth/logs`): Berth's own log, live, with the same Side panel and Full
   screen views as the apps' logs. It shows the last 300 lines on open, then new ones as they
   are written. It is Berth's log (starts, deploys, failed logins, errors), not an app's log.
@@ -458,6 +464,9 @@ against real PostgreSQL, Redis, MongoDB and RabbitMQ.
 | **MySQL** | reachability and version, from the server greeting (no login needed) |
 | **HTTP / TCP** | status code and response time / connect time, for GopherPost, Gotenberg, the APIs, Traefik and others |
 
+- **Groups:** the Services page is sorted into sections with icons and a jump bar at the top:
+  Databases and caches (PostgreSQL, MySQL, MongoDB, Redis), Messaging (RabbitMQ), Apps and APIs (HTTP)
+  and Ports and other (TCP). A section shows how many of its services are down or have alerts.
 - **Add** a service with the form (a **Test connection** button tries it without saving). The
   page also **suggests** the services found on the production server
   (`config/expected-services.yaml`); adding one opens the form pre-filled.
@@ -534,7 +543,7 @@ cd /mnt/blockvolume/Berth
 ## 14. Moving an app under Berth: checklist
 
 Learned moving the Kite360 and NyasaHub apps from hand-started processes and containers to Berth
-on 2026-11-23. All four apps (Kite360 web and API, NyasaHub web and API) now run through Berth.
+on 2026-11-23. All four apps (Kite360 web and API, NyasaHub web and API) now run through Berth; SB API followed on 2026-11-24 (items 12 to 15).
 
 1. **Back up the database first** (`pg_dump -Fc <db>`) and keep a copy off the server.
 2. **A container cannot use `127.0.0.1` or `localhost` for host services.** Use
@@ -562,3 +571,18 @@ on 2026-11-23. All four apps (Kite360 web and API, NyasaHub web and API) now run
 10. **Existing stacks keep their volumes** only if Berth uses their compose project name
     (`compose_project`), see section 9.
 11. **Never commit `.env` copies** (`.env.*`, `*.bak`); check `git ls-files | grep env` first.
+12. **Check what the app opens by relative path** (`grep -rnE 'ParseFiles|ReadFile|os.Open|"\./|"internal/'`).
+    Anything not copied into the image (templates, data files) fails only when that code runs, often at
+    start. SB-API needed `internal/templates`, `internal/models/metadata` and writable `geonames/`/`uploads/`
+    folders. Test the image as the user it will run as: `docker run --rm --user 1001:1001 --entrypoint sh <image> -c 'ls ...; touch ...'`.
+13. **Build with the Go version the server's `go.mod` asks for**, not the Mac's: uncommitted edits on the server
+    can raise it (`go.mod requires go >= 1.25.0`). Keep `.env`, key files and `cookies.txt` out of the image with `.dockerignore`.
+14. **A key file read by relative path** (Firebase `./key.json`) needs a Berth variable pointing at the mounted path
+    (`/run/secrets/...`). Without it the Firebase library only says "project ID is required", not that the file is missing.
+15. **A deploy that fails at "unhealthy" leaves a restarting container**; each restart can re-run seeds against the
+    live database. Read `docker logs` for the cause, and `docker stop` it if you cannot fix it quickly.
+16. **Every app needs its own RabbitMQ queue names.** NyasaHub and SB-API both defaulted to `email_messages_queue`
+    and each consumer looks a message's `SentEmailID` up in its own database, so an email could be taken by the
+    wrong app (sent wrongly, dropped or bounced). Set `RABBITMQ_EMAIL_QUEUE` per app (`sb_email_queue`,
+    `nyasahub_email_queue`, `kite360_email_queue`) and check `rabbitmqctl list_queues name consumers` shows one
+    consumer on each.

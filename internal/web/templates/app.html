@@ -32,5 +32,6 @@
 <div class="card"><h2>{{icon "rocket"}}Deploys</h2>
 {{range .Deploys}}<details {{if eq .Status "running"}}open{{end}}><summary><span class="badge {{.Status}}">{{.Status}}</span> <span>{{.Kind}} #{{.ID}}</span><span class="mute">{{.StartedAt.Format "2006-01-02 15:04"}}{{if .CommitSHA}} · {{printf "%.8s" .CommitSHA}}{{end}}</span></summary>
 {{if .CanRollback}}<form method="post" action="{{base}}/apps/{{$.App.Name}}/rollback" data-confirm="Roll back to deploy #{{.ID}}? Database migrations are not undone." style="margin:8px 0"><input type="hidden" name="deploy_id" value="{{.ID}}"><button class="plain">{{icon "undo-2"}}Roll back to this</button></form>{{end}}
-<div hx-get="{{base}}/deploys/{{.ID}}/log" hx-trigger="load{{if eq .Status "running"}}, every 2s{{end}}" hx-swap="innerHTML">…</div></details>
+<div class="term" data-term><div class="termbar"><span class="mute">Deploy output</span><button type="button" class="plain" data-term-full title="Show this output over the whole window (Escape leaves)"><span class="i-max">{{icon "maximize"}}</span><span class="i-min">{{icon "minimize"}}</span><span class="term-label">Full screen</span></button></div>
+<div class="termbody" hx-get="{{base}}/deploys/{{.ID}}/log" hx-trigger="load{{if eq .Status "running"}}, every 2s{{end}}" hx-swap="innerHTML">…</div></div></details>
 {{else}}<p class="mute">No deploys yet.</p>{{end}}</div>{{end}}

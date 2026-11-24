@@ -7,7 +7,7 @@ func TestEmbeddedListIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"kite360-web", "kite360-api", "nyasahub-api", "nyasahub-web", "gopherpost", "gotenberg", "sb-web", "tusk", "pgadmin4"}
+	want := []string{"kite360-web", "kite360-api", "nyasahub-api", "sb-api", "nyasahub-web", "gopherpost", "gotenberg", "sb-web", "tusk", "pgadmin4"}
 	if len(apps) != len(want) {
 		t.Fatalf("unexpected list: %+v", apps)
 	}
@@ -18,6 +18,9 @@ func TestEmbeddedListIsValid(t *testing.T) {
 	}
 	if apps[2].Subfolder != "deployments/docker" || apps[2].ComposeFile != "docker-compose.prod.yml" {
 		t.Errorf("NyasaHub API must use the production compose file, got %q in %q", apps[2].ComposeFile, apps[2].Subfolder)
+	}
+	if apps[3].Subfolder != "deployments/docker" || apps[3].ComposeFile != "docker-compose.prod.yml" {
+		t.Errorf("SB API must use the production compose file, got %q in %q", apps[3].ComposeFile, apps[3].Subfolder)
 	}
 	for _, a := range apps {
 		wantMonitor := a.Name != "pgadmin4" // an admin tool, not part of the product
@@ -95,7 +98,7 @@ func TestExpectedServices(t *testing.T) {
 	for _, s := range svcs {
 		have[s.Name] = s
 	}
-	for name, port := range map[string]int{"postgres-main": 5432, "redis-main": 6379, "mongo-main": 27017, "rabbitmq-main": 5672, "mysql-main": 3306, "kite360-api": 8001, "nyasahub-api": 8090} {
+	for name, port := range map[string]int{"postgres-main": 5432, "redis-main": 6379, "mongo-main": 27017, "rabbitmq-main": 5672, "mysql-main": 3306, "kite360-api": 8001, "nyasahub-api": 8090, "sb-api": 8580} {
 		if have[name].Port != port {
 			t.Errorf("%s should be on port %d, got %d", name, port, have[name].Port)
 		}
