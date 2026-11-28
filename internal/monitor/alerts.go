@@ -75,6 +75,16 @@ func Conditions(kind string, params map[string]string, r Result, failures int) [
 		if m["containers_unhealthy"] >= 1 {
 			add("unhealthy", "warning", "%.0f container(s) fail their health check", m["containers_unhealthy"])
 		}
+	case "backups":
+		if m["backup_hosts"] < 1 {
+			add("nodata", "warning", "no run reports found under %s/reports: no agent has reported yet, or the folder is wrong", r.Info["dir"])
+		}
+		if m["stale_hosts"] >= 1 {
+			add("stale", "critical", "no successful backup within %.0f hours: %s", Threshold(params, "stale_hours", 26), r.Info["stale"])
+		}
+		if m["degraded_hosts"] >= 1 {
+			add("degraded", "warning", "the latest backup run did not complete every source: %s", r.Info["degraded"])
+		}
 	case "http":
 		if t := Threshold(params, "latency_ms", 2000); t > 0 && m["latency_ms"] > t {
 			add("slow", "warning", "responded in %.0f ms (threshold %.0f ms)", m["latency_ms"], t)

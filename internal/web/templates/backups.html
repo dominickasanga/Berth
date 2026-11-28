@@ -1,0 +1,21 @@
+{{define "crumbs"}}<nav class="crumbs" aria-label="Breadcrumb"><span aria-current="page">Backups</span></nav>{{end}}
+{{define "content"}}
+{{if not .Enabled}}<h1>Backups</h1>
+<div class="card"><p>Berth is not watching any backups yet.</p>
+<p class="mute">Set <code>BERTH_BACKUPS_DIR</code> to the folder where the TusK receiver keeps its files (the one that contains <code>reports/</code>, <code>backups/</code> and so on) and restart Berth. Berth only reads that folder: it never changes or deletes anything in it.</p></div>
+{{else}}
+<div class="row"><h1 style="flex:1">Backups</h1>
+<nav class="ranges" aria-label="Time range">{{range .Ranges}}<a href="{{base}}/backups?range={{.Key}}" {{if eq .Key $.Range}}aria-current="true"{{end}}>{{.Label}}</a>{{end}}</nav></div>
+<p class="mute">What the backup agents reported, and what the receiver holds. Read from the receiver's folder every 30 seconds; Berth never writes to it.</p>
+
+<div class="card tile {{.Banner.Level}}"><div class="big" style="font-size:20px">{{.Banner.Title}}</div><div class="mute">{{.Banner.Detail}}</div></div>
+
+{{if .Open}}<div class="card"><h2>{{icon "bell"}}Active alerts</h2><table>{{range .Open}}<tr><td><a href="{{base}}/services/{{.ServiceID}}">{{.Key}}</a></td><td><span class="badge {{if eq .Severity "critical"}}failed{{else}}running{{end}}">{{.Severity}}</span> {{.Message}}</td><td class="mute" style="white-space:nowrap">{{.OpenedAt.Format "2006-01-02 15:04"}}</td></tr>{{end}}</table>
+<p class="mute">Emails can be paused from the <a href="{{base}}/services/{{.ServiceID}}">service page</a>.</p></div>{{end}}
+{{if .Unreadable}}<div class="card"><span class="badge warn">{{.Unreadable}} report file(s) could not be read</span> <span class="mute">They are skipped. Check that the files in <code>reports/</code> are complete JSON.</span></div>{{end}}
+
+{{range .Tables}}<div class="card"><h2>{{.Title}}</h2><div style="overflow-x:auto"><table><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr>{{range .Rows}}<tr>{{range .}}<td>{{if .Badge}}<span class="badge {{.Badge}}">{{.Text}}</span>{{else}}{{.Text}}{{end}}</td>{{end}}</tr>{{end}}</table></div></div>{{end}}
+
+{{if .Charts}}<div class="grid charts">{{range .Charts}}<div class="card chart"><div class="row" style="margin-bottom:4px"><strong>{{.Title}}</strong><span style="flex:1"></span><span class="mute">{{.Last}}</span></div>{{.SVG}}</div>{{end}}</div>{{end}}
+{{end}}
+{{end}}

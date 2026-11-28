@@ -60,6 +60,8 @@ func Collector(kind string) CollectFunc {
 		return collectSystem
 	case "container":
 		return collectContainers
+	case "backups":
+		return collectBackups
 	}
 	return nil
 }

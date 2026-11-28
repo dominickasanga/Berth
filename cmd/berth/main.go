@@ -218,7 +218,7 @@ func main() {
 		if n, err := strconv.Atoi(os.Getenv("BERTH_METRICS_RETENTION_DAYS")); err == nil && n > 0 {
 			retention = n
 		}
-		srv.Sampler = &monitor.Sampler{Store: st, Box: box, Mail: mail, ProjectName: deploy.ProjectName, Interval: time.Duration(interval) * time.Second,
+		srv.Sampler = &monitor.Sampler{Store: st, Box: box, Mail: mail, ProjectName: deploy.ProjectName, BackupsDir: os.Getenv("BERTH_BACKUPS_DIR"), Interval: time.Duration(interval) * time.Second,
 			Retention: time.Duration(retention) * 24 * time.Hour, PublicURL: strings.TrimRight(os.Getenv("BERTH_PUBLIC_URL"), "/")}
 		srv.MailOn = mail != nil
 		srv.Security = &security.Runner{Store: st, Dir: srv.Deploy.CheckoutDir, ProjectName: deploy.ProjectName, Vuln: &security.VulnChecker{}}

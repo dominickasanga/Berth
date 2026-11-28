@@ -120,6 +120,13 @@ var kinds = map[string]KindDef{
 		Metrics: []MetricDef{{"cpu_pct", "CPU", "pct_core"}, {"mem_bytes", "Memory", "bytes"}, {"restarts", "Restarts", "count"}, {"containers_running", "Containers running", "count"}},
 		Card:    []string{"containers_running", "cpu_pct", "mem_bytes", "restarts"},
 	},
+	"backups": {
+		Kind: "backups", Label: "Backups", Internal: true,
+		Thresholds: []ThresholdDef{{"stale_hours", "Alert when no successful backup for", 26, "h"}},
+		Metrics: []MetricDef{{"worst_age_hours", "Hours since the last good backup", "hours"}, {"storage_bytes", "Backup storage", "bytes"}, {"storage_files", "Files stored", "count"},
+			{"backup_hosts", "Hosts reporting", "count"}, {"stale_hosts", "Hosts with no recent good backup", "count"}, {"degraded_hosts", "Hosts whose latest run was incomplete", "count"}},
+		Card: []string{"worst_age_hours", "storage_bytes", "backup_hosts", "degraded_hosts"},
+	},
 	"tcp": {
 		Kind: "tcp", Label: "TCP port", NeedsHost: true,
 		CredentialsHelp: "Only checks that the port accepts a connection.",
@@ -176,6 +183,8 @@ func Format(unit string, v float64) string {
 			return fmt.Sprintf("%.1f ms", v)
 		}
 		return fmt.Sprintf("%.0f ms", v)
+	case "hours":
+		return fmt.Sprintf("%.1f h", v)
 	case "bool":
 		if v >= 0.5 {
 			return "yes"

@@ -127,6 +127,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /overview", s.auth(s.overviewPage))
 	mux.HandleFunc("GET /security", s.auth(s.securityPage))
 	mux.HandleFunc("POST /security/scan", s.auth(s.securityScan))
+	mux.HandleFunc("GET /backups", s.auth(s.backupsPage))
 	mux.HandleFunc("GET /services", s.auth(s.servicesPage))
 	mux.HandleFunc("GET /services/new", s.auth(s.serviceNewPage))
 	mux.HandleFunc("POST /services", s.auth(s.serviceCreate))

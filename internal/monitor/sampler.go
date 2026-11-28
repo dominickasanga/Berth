@@ -23,6 +23,8 @@ type Sampler struct {
 	// ProjectName gives an app's compose project, which its containers are labelled with.
 	// Nil means "berth-<name>".
 	ProjectName func(store.App) string
+	// BackupsDir is the TusK receiver's "received" folder. Empty means backups are not measured.
+	BackupsDir string
 
 	running sync.Map // service id -> struct{}: never run two checks of one service at once
 }
@@ -231,11 +233,23 @@ func (s *Sampler) SyncInternal(ctx context.Context) {
 			}
 		}
 	}
+	want := map[string]bool{"server": true}
+	if s.BackupsDir != "" {
+		want["backups"] = true
+		params := map[string]string{"dir": s.BackupsDir}
+		if cur, ok := have["backups"]; !ok {
+			if _, err := s.Store.CreateService(ctx, store.Service{Name: "backups", Kind: "backups", Enabled: true, Params: params}); err != nil {
+				log.Printf("monitor: cannot add the backups check: %v", err)
+			}
+		} else if cur.Params["dir"] != s.BackupsDir {
+			cur.Params = params
+			s.Store.UpdateService(ctx, cur)
+		}
+	}
 	apps, err := s.Store.ListApps(ctx)
 	if err != nil {
 		return
 	}
-	want := map[string]bool{"server": true}
 	for _, a := range apps {
 		if !a.Monitor {
 			continue
@@ -257,7 +271,7 @@ func (s *Sampler) SyncInternal(ctx context.Context) {
 		}
 	}
 	for name, v := range have {
-		if !want[name] && v.Kind == "container" {
+		if !want[name] && (v.Kind == "container" || v.Kind == "backups") {
 			s.Store.DeleteService(ctx, v.ID)
 		}
 	}

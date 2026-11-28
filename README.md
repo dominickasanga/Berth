@@ -278,6 +278,7 @@ go build -o berth ./cmd/berth
 | `BERTH_SMTP_HOST`, `BERTH_SMTP_PORT` (587), `BERTH_SMTP_USER`, `BERTH_SMTP_PASS`, `BERTH_SMTP_FROM`, `BERTH_ALERT_TO` | unset | alert email. Both host and `BERTH_ALERT_TO` (comma-separated) are needed. STARTTLS is used when offered; port 465 uses TLS. Without them alerts are shown on the Services page only |
 | `BERTH_ALERT_URL`, `BERTH_ALERT_TO`, `BERTH_ALERT_BRAND`, `BERTH_ALERT_FROM_NAME` (`Berth`) | unset | alert email through GopherPost instead of SMTP: `BERTH_ALERT_URL` is its send-email endpoint (`http://127.0.0.1:8787/api55/v65/send-email`), `BERTH_ALERT_TO` the recipients. GopherPost sends non-`linmalawi.org` recipients (Gmail included) through Brevo. `BERTH_ALERT_BRAND=kite360` sends as `noreply@kite360.live` (verified in Brevo with DKIM and DMARC) with Kite360 branding; empty uses GopherPost's default sender and branding. Takes priority over the SMTP variables |
 | `BERTH_AUTH_LOG` | `/var/log/auth.log` | the SSH log the Security page reads for failed logins (its rotated `.1` file is read too) |
+| `BERTH_BACKUPS_DIR` | unset | the TusK receiver's `received` folder (the one holding `reports/`, `backups/` and so on). Set, Berth reads the agents' run reports and shows the **Backups** page and its alerts; unset, the feature is off. Berth only reads it (see section 12) |
 | `BERTH_PUBLIC_URL` | unset | base URL (including the prefix) used for links in alert emails |
 | `BERTH_REQUEST_LOG` | `quiet` | request log: `quiet` (default), `all` or `off`; see section 11 |
 | `BERTH_LOG_FILE` | `<data dir>/logs/berth.log` | Berth's own log file; set to an empty string to turn the file off |
@@ -575,6 +576,29 @@ are never read into a result.
     minute, so an attack cannot fill the database; the log file still has every one.
 - A check that cannot run (folder missing, no `git`, Docker not reachable, the database unreachable)
   says so instead of showing "nothing found".
+
+### Backups page (`/_berth/backups`)
+
+Shows what the TusK backup agents reported and what the receiver holds. It is on when `BERTH_BACKUPS_DIR`
+points at the receiver's `received` folder (on the production server `/mnt/blockvolume/tusk-data/received`).
+**Berth only reads that folder; it never writes to it or deletes anything in it**, and TusK keeps receiving as before.
+
+- **Source:** every night each agent sends a small JSON run report into `received/reports/`. Berth reads
+  those files and scans the folder for sizes, every `BERTH_METRICS_INTERVAL` seconds. The files are the
+  record: TusK's own database is only a copy of them, so Berth does not need it.
+- **Banner**, same rules as TusK's dashboard: red when a host has no *successful* run within 26 hours (a run
+  that happened and failed is not reassurance), amber when the latest run did not succeed for every source,
+  green otherwise. Judged per host, so a host that goes silent shows even while another reports fine.
+- **Tables:** the latest run per host, each source of that run (status, files, bytes sent, error), the 15 most
+  recent runs, and storage per folder. Graphs show hours since the last good backup and the storage used.
+- **Alerts** (the usual email, `RESOLVED` mail and pause control on the service page): `stale` (critical),
+  `degraded` (warning), `nodata` (warning: no reports found, or the folder is wrong), and `down` when the
+  folder cannot be read (after 2 checks). The 26 hours is fixed for now.
+- A report file that cannot be parsed is skipped and counted on the page, so one bad file never hides the rest.
+- Berth's user must be able to read the folder. TusK's container writes as uid 65532; its directories are `755`
+  and files `644`, so another user can read them. If yours are stricter, grant read access to Berth's user.
+- Not shown (they are not on disk, only in TusK's database and log): rejected uploads and retention passes.
+  Retention deletion stays where it is, in the receiver.
 
 ## 13. Updating Berth on the server
 
