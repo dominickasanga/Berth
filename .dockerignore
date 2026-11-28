@@ -1,0 +1,9 @@
+# Keep the build context small and never bake secrets or local state into an image.
+# Anchored to the repository root: an unanchored "data" would also match internal source folders.
+.git
+/data/
+/berth
+/berth.*
+/berth-*
+*.env
+*.dump

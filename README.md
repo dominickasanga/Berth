@@ -671,3 +671,89 @@ on 2026-11-23. All four apps (Kite360 web and API, NyasaHub web and API) now run
     wrong app (sent wrongly, dropped or bounced). Set `RABBITMQ_EMAIL_QUEUE` per app (`sb_email_queue`,
     `nyasahub_email_queue`, `kite360_email_queue`) and check `rabbitmqctl list_queues name consumers` shows one
     consumer on each.
+
+## 15. The backup receiver (`berth receive`) and replacing TusK's
+
+`berth receive` is the TusK backup receiver, built into the same binary. It speaks exactly TusK's protocol
+(same `/beam/` path, same basic auth and `realm="TusK"`, same refusals: 401, 400 for a missing checksum or a
+`..` path, 5xx on a checksum mismatch, 507 when the disk is below its reserve), so agents already installed on
+other servers keep working unchanged. It has **no database and no dashboard**: the files under `received/` are the
+record, and the Backups page (section 12) reads them. It runs as its **own container**, not inside `berth serve`:
+the internet-facing upload endpoint stays out of the process that holds the Docker socket, and a Berth restart or
+update never interrupts an upload. Its code is TusK's `receive`, `retain`, `preflight` and `bootstrap` packages,
+copied under `internal/receiver/` with their tests.
+
+Checked against TusK's own server (built from its repository): the same HTTP requests give byte-identical responses
+(headers, both 401s, `install.sh`, the agent and sender binaries), and a real `tusk-agent` run through each gave the same
+received tree and archive contents. The differences: `/beam/admin/` no longer serves a dashboard, history is not recorded
+in a database, and rejected uploads and retention passes appear only in the container log.
+
+Settings are TusK's own names, with the same defaults. `TUSK_ADMIN_*`, `TUSK_UI_PATH` and `DB_*` are not used (a note is logged if
+`TUSK_ADMIN_PASSWORD` or `DB_HOST` is still set).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TUSK_PASSWORD` | required | the upload password shared with every agent (**keep the live value**; changing it means touching every agent) |
+| `TUSK_USER` | `admin` | its user name |
+| `TUSK_MIN_FREE_BYTES` | 1 GiB (compose: 10 GiB) | uploads that would leave less free than this get a 507 before any data is sent |
+| `TUSK_RETENTION`, `TUSK_RETENTION_DIRS`, `TUSK_RETENTION_DRYRUN` | compose: `7,4,12`, `backups`, `1` | grandfather-father-son retention for the named folders only. **Dry run by default**: it logs `would delete` and deletes nothing until `TUSK_RETENTION_DRYRUN` is `0`. A file whose name has no timestamp and the newest backup are never deleted; `reports/` is never pruned |
+| `TUSK_ALLOW_UNVERIFIED` | off | `1` accepts uploads that carry no sha256 |
+| `TUSK_DATA_DIR`, `TUSK_BIN_DIR` | required (compose) | host folder with `uploads/` and `received/` (owned by uid 65532); host folder holding `tusk-agent` and `tusk-send`, served at `/beam/get-agent` and `/beam/get-client` |
+| `TUSK_BIND`, `TUSK_HOST_PORT` | `127.0.0.1`, `5183` | where the host publishes it. Traefik reaches it through the host's private address, so production uses `0.0.0.0` |
+| `TZ` | `Africa/Blantyre` | log timestamps |
+
+`berth receive -check` runs the startup checks only (writable folders, same filesystem, free space) and exits. The container
+runs them at every start and refuses to start on a fatal one.
+
+### Replacing the running TusK receiver on the server
+
+Nothing below changes what agents see: the URL, the port (5183 on the host's private address, which Traefik already
+routes to), the password and the data folder stay the same. The old container is stopped, never removed, so going back
+is one command. Do the swap in the daytime: the agent on `tams` runs at about 23:32 (Malawi time).
+
+1. **Update Berth** (`./update.sh`) and set `BERTH_BACKUPS_DIR` (section 12) so the Backups page shows the run history.
+2. **Safety copies**, on the server:
+   ```sh
+   DATA=/mnt/blockvolume/tusk-data
+   sudo sh -c "cd $DATA/received && find . -type f -exec sha256sum {} + | sort -k2" > ~/tusk-manifest-$(date +%F).txt
+   sudo cp -a $DATA /mnt/blockvolume/tusk-data.bak-$(date +%F)          # about 7 GB; check df first
+   docker exec tusk_db_1 pg_dump -U postgres tusk | gzip > ~/tusk-db-$(date +%F).sql.gz   # keeps the retention history
+   ```
+3. **Keep the exact sender binaries agents download today**, copied out of the running receiver:
+   ```sh
+   sudo mkdir -p /mnt/blockvolume/tusk-bin
+   sudo docker cp tusk_receiver_1:/usr/local/share/tusk/. /mnt/blockvolume/tusk-bin/
+   sudo chmod -R a+rX /mnt/blockvolume/tusk-bin && ls -l /mnt/blockvolume/tusk-bin   # tusk-agent and tusk-send
+   ```
+4. **Register the app** in Berth (Apps, Register app): name `tusk-receiver`, repository `git@github.com:dominickasanga/Berth.git`,
+   branch `main`, subfolder `deploy/receiver`, compose file `docker-compose.yml`, no pre-deploy service. It runs as a clone
+   of its own, so Berth never touches this source folder.
+5. **Test beside the live one** on another port with a scratch folder. In the app's variables set `TUSK_PASSWORD` (the live
+   value, copied from `/mnt/blockvolume/td/TusK/.env`), `TUSK_BIND=0.0.0.0`, `TUSK_HOST_PORT=5184`,
+   `TUSK_DATA_DIR=/mnt/blockvolume/tusk-scratch`, `TUSK_BIN_DIR=/mnt/blockvolume/tusk-bin`, `TUSK_MIN_FREE_BYTES=10737418240`,
+   `TUSK_RETENTION=7,4,12`, `TUSK_RETENTION_DIRS=backups`, `TUSK_RETENTION_DRYRUN=1`, `TZ=Africa/Blantyre`
+   (`sudo mkdir -p /mnt/blockvolume/tusk-scratch && sudo chown 65532:65532 /mnt/blockvolume/tusk-scratch` first), then Deploy. Check:
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5184/beam/                        # 401
+   echo hello > /tmp/hello.txt
+   TUSK_PASSWORD=... /mnt/blockvolume/tusk-bin/tusk-send -quiet -server http://127.0.0.1:5184/beam/ -relpath test/hello.txt /tmp/hello.txt
+   sudo cat /mnt/blockvolume/tusk-scratch/received/test/hello.txt                                # hello
+   ```
+6. **Swap** (daytime). Stop the old receiver, point the app at the real folder and port, deploy:
+   ```sh
+   docker stop tusk_receiver_1          # leave tusk_db_1 and everything else alone
+   ```
+   In Berth set `TUSK_DATA_DIR=/mnt/blockvolume/tusk-data` and `TUSK_HOST_PORT=5183`, then Deploy. The folder already holds
+   `uploads/` (including the half-finished upload from August: it is left alone) and `received/`. Check, from the server and from `tams`:
+   ```sh
+   curl -sI https://proworkwave.com/beam/ | head -3                       # 401, WWW-Authenticate: Basic realm="TusK"
+   sudo sh -c '. /etc/tusk/agent.env && export TUSK_PASSWORD && tusk-agent -config /etc/tusk/agent.json -check'   # on tams: all ticks
+   sudo find /mnt/blockvolume/tusk-data/received -type f | wc -l          # the same count as before, plus new arrivals
+   ```
+7. **Watch the next nightly run** (about 23:32): the Backups page shows a new run, and the container log shows `Received` lines.
+8. **Going back**, if anything looks wrong: stop `tusk-receiver` in Berth, then `docker start tusk_receiver_1`. Nothing was removed.
+9. **After a week of good nights:** remove the old stack (`docker rm tusk_receiver_1`; keep `tusk_db_1`'s volume and the dump until you
+   are sure), and drop the `tusk` app from Berth.
+
+Berth's `update.sh` updates and restarts only `berth serve`. The receiver is updated by Deploy on the `tusk-receiver` app.
+

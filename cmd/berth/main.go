@@ -2,6 +2,7 @@
 //
 //	berth serve                 start the web server
 //	berth admin-create <user>   create an admin (reads password from stdin), prints the 2FA secret
+//	berth receive [-check]      run the TusK backup receiver (needs no Berth database; see internal/receiver)
 package main
 
 import (
@@ -23,6 +24,7 @@ import (
 	"github.com/dominickasanga/berth/internal/deploy"
 	"github.com/dominickasanga/berth/internal/logs"
 	"github.com/dominickasanga/berth/internal/monitor"
+	"github.com/dominickasanga/berth/internal/receiver"
 	"github.com/dominickasanga/berth/internal/security"
 	"github.com/dominickasanga/berth/internal/store"
 	"github.com/dominickasanga/berth/internal/web"
@@ -101,11 +103,15 @@ func version() string {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: berth serve | berth admin-create <username>")
+		fmt.Fprintln(os.Stderr, "usage: berth serve | berth admin-create <username> | berth receive")
 		os.Exit(2)
 	}
 	if os.Args[1] == "version" { // needs no settings
 		fmt.Println("berth", version())
+		return
+	}
+	if os.Args[1] == "receive" { // the backup receiver has its own TUSK_* settings and no database
+		receiver.Main(os.Args[2:])
 		return
 	}
 	ctx := context.Background()

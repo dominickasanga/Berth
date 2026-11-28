@@ -1,0 +1,38 @@
+# The TusK backup receiver, run by Berth as an app. Register it in Berth with:
+#   repository: this repository, branch main, subfolder deploy/receiver, compose file docker-compose.yml
+# and choose "Clone a new copy". Set the variables below in Berth (TUSK_PASSWORD is the secret).
+# See README.md, section "The backup receiver".
+services:
+  receiver:
+    build:
+      context: ../..
+      dockerfile: deploy/receiver/Dockerfile
+    image: berth-receiver:latest
+    restart: unless-stopped
+    ports:
+      # Loopback unless TUSK_BIND says otherwise. Traefik reaches the receiver through the host's
+      # private address, so production sets TUSK_BIND (the old receiver published on 0.0.0.0).
+      - "${TUSK_BIND:-127.0.0.1}:${TUSK_HOST_PORT:-5183}:5183"
+    environment:
+      # Shared with every sending machine. Rotating it means updating every sender.
+      TUSK_PASSWORD: ${TUSK_PASSWORD:?TUSK_PASSWORD is required}
+      TUSK_USER: ${TUSK_USER:-admin}
+      TUSK_MIN_FREE_BYTES: ${TUSK_MIN_FREE_BYTES:-10737418240}
+      # Retention starts in dry-run: it only logs what it would delete. Read the log before setting
+      # TUSK_RETENTION_DRYRUN to 0.
+      TUSK_RETENTION: ${TUSK_RETENTION:-7,4,12}
+      TUSK_RETENTION_DIRS: ${TUSK_RETENTION_DIRS:-backups}
+      TUSK_RETENTION_DRYRUN: ${TUSK_RETENTION_DRYRUN:-1}
+      TUSK_ALLOW_UNVERIFIED: ${TUSK_ALLOW_UNVERIFIED:-}
+      TZ: ${TZ:-Africa/Blantyre}
+    volumes:
+      # A host folder owned by uid 65532 (the user the image runs as), holding uploads/ and received/.
+      # Berth never deletes it.
+      - ${TUSK_DATA_DIR:?TUSK_DATA_DIR is required}:/data
+      # The folder with the agent and sender binaries that agents download from /beam/get-agent.
+      - ${TUSK_BIN_DIR:?TUSK_BIN_DIR is required}:/usr/local/share/tusk:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
