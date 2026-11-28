@@ -172,3 +172,29 @@ func TestRenamedRepositoryMatchesByAlias(t *testing.T) {
 		t.Fatalf("an unrelated remote must still be flagged: %+v", c)
 	}
 }
+
+// The receiver's repository is Berth's own, so it is found as Berth's folder (by git remote), however
+// the remote is written on the server.
+func TestTuskReceiverIsFoundAsBerthsOwnFolder(t *testing.T) {
+	all, err := config.Expected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recv []config.ExpectedApp
+	for _, a := range all {
+		if a.Name == "tusk-receiver" {
+			recv = append(recv, a)
+		}
+	}
+	if len(recv) != 1 || recv[0].Subfolder != "deploy/receiver" || recv[0].ComposeFile != "docker-compose.yml" {
+		t.Fatalf("the receiver entry: %+v", recv)
+	}
+	parent := t.TempDir()
+	gitFolder(t, parent, "Berth", "git@github.com:dominickasanga/Berth.git", "main")
+	gitFolder(t, parent, "TusK", "git@github.com:dominickasanga/TusK.git", "main") // the old receiver is not mistaken for it
+	found, _ := Scan([]string{parent}, recv)
+	got := found["tusk-receiver"]
+	if len(got) != 1 || got[0].Folder != "Berth" || !got[0].RemoteMatch || got[0].Remote != "git@github.com:dominickasanga/Berth.git" {
+		t.Fatalf("expected Berth's folder, matched by remote, keeping the SSH form that already works: %+v", got)
+	}
+}

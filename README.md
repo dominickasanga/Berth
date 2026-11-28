@@ -725,9 +725,10 @@ is one command. Do the swap in the daytime: the agent on `tams` runs at about 23
    sudo docker cp tusk_receiver_1:/usr/local/share/tusk/. /mnt/blockvolume/tusk-bin/
    sudo chmod -R a+rX /mnt/blockvolume/tusk-bin && ls -l /mnt/blockvolume/tusk-bin   # tusk-agent and tusk-send
    ```
-4. **Register the app** in Berth (Apps, Register app): name `tusk-receiver`, repository `git@github.com:dominickasanga/Berth.git`,
-   branch `main`, subfolder `deploy/receiver`, compose file `docker-compose.yml`, no pre-deploy service. It runs as a clone
-   of its own, so Berth never touches this source folder.
+4. **Register the app** from the Discover page: **TusK receiver (berth receive)** is listed there (it is found as Berth's own folder, by its
+   git remote), like the other apps. Choose **Clone a new copy**, never "use the existing folder": it should run from a clone of its own
+   and leave the folder Berth is built from alone. Berth keeps the SSH remote that already works on the server. (By hand instead:
+   Apps, Register app, with this repository, branch `main`, subfolder `deploy/receiver`, compose file `docker-compose.yml`.)
 5. **Test beside the live one** on another port with a scratch folder. In the app's variables set `TUSK_PASSWORD` (the live
    value, copied from `/mnt/blockvolume/td/TusK/.env`), `TUSK_BIND=0.0.0.0`, `TUSK_HOST_PORT=5184`,
    `TUSK_DATA_DIR=/mnt/blockvolume/tusk-scratch`, `TUSK_BIN_DIR=/mnt/blockvolume/tusk-bin`, `TUSK_MIN_FREE_BYTES=10737418240`,

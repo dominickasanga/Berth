@@ -7,7 +7,7 @@ func TestEmbeddedListIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"kite360-web", "kite360-api", "nyasahub-api", "sb-api", "nyasahub-web", "gopherpost", "gotenberg", "sb-web", "tusk", "pgadmin4"}
+	want := []string{"kite360-web", "kite360-api", "nyasahub-api", "sb-api", "nyasahub-web", "gopherpost", "gotenberg", "sb-web", "tusk", "tusk-receiver", "pgadmin4"}
 	if len(apps) != len(want) {
 		t.Fatalf("unexpected list: %+v", apps)
 	}

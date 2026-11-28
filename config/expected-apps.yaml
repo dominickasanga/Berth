@@ -109,6 +109,18 @@ apps:
     compose_project: tusk                # containers: tusk_receiver_1, tusk_db_1; its Postgres data is in a named volume
     monitor: true
 
+  - name: tusk-receiver
+    title: TusK receiver (berth receive)
+    repo: https://github.com/dominickasanga/Berth
+    branch: main
+    subfolder: deploy/receiver           # its Dockerfile and compose file live here; the build context is the repo root
+    compose_file: docker-compose.yml
+    # No folder_names: Discover finds it as Berth's own folder, by the git remote. Register it with
+    # "Clone a new copy" (never "use the existing folder"): the receiver should run from a clone of its
+    # own and leave the folder Berth is built from alone. Needs TUSK_PASSWORD, TUSK_DATA_DIR and
+    # TUSK_BIN_DIR (README section 15). It replaces the "tusk" receiver above once swapped in.
+    monitor: true
+
   - name: pgadmin4
     title: pgAdmin 4
     repo: https://github.com/dominickasanga/pgadmin4
